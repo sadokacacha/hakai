@@ -110,7 +110,7 @@ class DeauthManager:
                 try:
                     sendp(pkt_ps, iface=self._iface, verbose=False, count=5)
                     sendp(pkt_auth, iface=self._iface, verbose=False, count=5)
-                except:
+                except Exception:
                     pass
             time.sleep(1)
 
