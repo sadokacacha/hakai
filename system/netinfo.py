@@ -88,7 +88,6 @@ def _detect_network_windows() -> NetInfo:
                 # Convert mask to prefix length
                 prefix = sum(bin(int(o)).count("1") for o in mask.split("."))
                 octets = info.my_ip.split(".")
-                mask_int = int(mask.replace(".", ""))
                 m_ints = [int(o) for o in mask.split(".")]
                 net_oc = [str(int(octets[i]) & m_ints[i]) for i in range(4)]
                 info.subnet = ".".join(net_oc) + f"/{prefix}"

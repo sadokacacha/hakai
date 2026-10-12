@@ -60,8 +60,6 @@ def _check_deps():
 _check_root()
 _check_deps()
 
-import tkinter as tk
-
 from system.netinfo import detect_network
 from core.controller import Controller
 from core.persistence import db, sync_vendor_db_bg
@@ -104,7 +102,6 @@ def main():
                      name="vendor_db_sync").start()
 
     # ── UI ────────────────────────────────────────────────────────────────────
-    import customtkinter as ctk
     app  = Dashboard(ctrl)
 
     app.protocol("WM_DELETE_WINDOW", app.on_close)

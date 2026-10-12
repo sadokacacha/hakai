@@ -463,8 +463,6 @@ class Controller:
                 if os_guess and os_guess != "Generic Device":
                     dev.os_guess = os_guess
                 dev.identity = classify_device(dev)
-                if dev.mac:
-                    db.set_nickname(dev.mac, dev.nickname)  # persist nickname if set
                 if log:
                     log(f"[FP] {ip} -> {dev.identity}  OS:{dev.os_guess or '?'}", "ok")
             if done_cb:
