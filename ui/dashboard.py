@@ -426,10 +426,10 @@ class Dashboard(ctk.CTk):
         is_active = "mtu 1492" in res.stdout
         self.ctrl.toggle_chameleon(not is_active, log=self.log_tactical)
     def _toggle_ipv6(self):
-        # We don't have a direct 'active' flag in controller for ipv6 yet, so we just toggle
-        # but we can check if RA thread is alive. For simplicity, we just toggle.
-        import subprocess
-        self.ctrl.toggle_ipv6_hijack(True, log=self.log_tactical)
+        # Toggle based on the hijacker's current running state so the switch
+        # can turn the feature off as well as on.
+        new_state = not self.ctrl.ipv6._running
+        self.ctrl.toggle_ipv6_hijack(new_state, log=self.log_tactical)
     def _on_ttl_change(self, v): self.ctrl.toggle_stack_masquerade(v > 100, log=self.log_tactical)
 
     def on_close(self):
