@@ -9,10 +9,10 @@ Findings are grouped by category and ranked by severity within each group. Sever
 - **Medium** — concurrency hazard, cross-platform break, or fragile logic that fails on common inputs.
 - **Low** — hygiene, dead code, cosmetic, convention violations.
 
-> **Note:** All Critical items (`3fb70c4`), all three High items (`8a83c7f`, `ae806e5`,
-> `da20e1b`), and the three concurrency hazards (`97bc37b`, `499194e`, `df666cd`) are fixed and
-> no longer present. They are recorded in §9. The highest-severity remaining findings are the
-> **Medium** security / side-effect items in §4–§5.
+> **Note:** All Critical, High, and Medium findings have been fixed and are no longer present
+> (commits `3fb70c4`, `8a83c7f`, `ae806e5`, `da20e1b`, `97bc37b`, `499194e`, `df666cd`,
+> `fb6ad05`, `4fd71aa`, `a2c68db`); they are recorded in §9. The highest-severity remaining
+> finding is one **Low–Medium** edge case (§2.1); everything else is **Low**.
 
 ---
 
@@ -73,21 +73,10 @@ Findings are grouped by category and ranked by severity within each group. Sever
 
 ## 4. Security
 
-### 4.1 Shell-string subprocesses with interpolated values in recon
-- **Severity:** Medium
-- **Location:** `network/recon_engine.py:153` (`create_subprocess_shell(f"dig @{dns_server} -x {ip} +short")`) and `:167` (`"ip -6 neigh show"`).
-- **What's wrong:** Uses the shell with f-string interpolation of `ip`/`dns_server`. Nothing validates these as IPs before interpolation; network-derived data flowing into one of these would be command injection. The second call uses the shell for no reason.
-- **Why it matters:** Command execution via network-derived data, and the tool runs as root.
-- **Fix:** `create_subprocess_exec("dig", "@"+dns_server, "-x", ip, "+short")` (arg list, no shell); validate `ip`/`dns_server` with `ipaddress.ip_address()` first.
+> Fixed since last audit (now in §9): shell-string recon subprocesses with interpolated IPs
+> (`fb6ad05`), and `engage_mirage_cloak` running `nft flush ruleset` (`4fd71aa`).
 
-### 4.2 `engage_mirage_cloak` runs `nft flush ruleset` — wipes the host's entire nftables config
-- **Severity:** Medium
-- **Location:** `system/stealth.py:56`.
-- **What's wrong:** `nft flush ruleset` deletes *all* nftables rules on the machine, not just Hakai's, with no backup. `disengage_stealth` (`:78`) only deletes the `hakai_stealth` table; the user's original ruleset is gone.
-- **Why it matters:** Destructive to any host firewall the operator relies on; not reversible.
-- **Fix:** Create/replace only the `hakai_stealth` table; never flush the global ruleset. Save and restore the ruleset if isolation is required.
-
-### 4.3 Kill-switch inserts a blanket `OUTPUT -j DROP`
+### 4.1 Kill-switch inserts a blanket `OUTPUT -j DROP`
 - **Severity:** Low
 - **Location:** `core/protector.py:122-125` inserts `iptables -I OUTPUT 1 -j DROP`; `disable_kill_switch` (`:115-120`) deletes it once.
 - **What's wrong:** Drops *all* host egress (including the tool's own ARP-restore packets), and repeated triggers accumulate duplicate rules while removal deletes only one.
@@ -97,20 +86,10 @@ Findings are grouped by category and ranked by severity within each group. Sever
 
 ## 5. Side-effecting detection / restore correctness
 
-### 5.1 Kernel is reconfigured for MITM as a side effect of *detecting* the network
-- **Severity:** Medium
-- **Location:** `system/netinfo.py:156-178`, inside `_detect_network_linux`, which `main.py:74` calls at startup before any user action.
-- **What's wrong:** Merely launching the app enables `ip_forward`, sets `rp_filter=0`, `proxy_arp=1`, disables send/accept redirects, enables promiscuous mode, and disables NIC offloads — before the operator chooses to do anything.
-- **Why it matters:** Detection should be read-only; coupling kernel mutation to it changes the host's routing/filtering posture just by opening the tool, and partial failures leave it half-configured.
-- **Fix:** Move all `sysctl`/`ip link`/`ethtool` mutation into an explicit "engage" step; capture/restore each sysctl independently.
+> Fixed since last audit (now in §9): MITM kernel tuning applied as a side effect of detection
+> (`a2c68db`), and `restore_network` restoring `accept_redirects` from the wrong value (`a2c68db`).
 
-### 5.2 `restore_network` restores `accept_redirects` from the wrong saved value
-- **Severity:** Medium
-- **Location:** `system/netinfo.py:200-202`. Only `_orig_forwarding`, `_orig_rp_filter`, `_orig_redirects` are captured (`:158-160`); `accept_redirects` original is never saved, yet `:202` restores `accept_redirects={info._orig_redirects}` (the send_redirects original).
-- **Why it matters:** After exit, `accept_redirects` is left at whatever `send_redirects` happened to be, not its true original.
-- **Fix:** Capture `_orig_accept_redirects` separately and restore from it.
-
-### 5.3 `masquerade` restore uses hardcoded values, not captured originals
+### 5.1 `masquerade` restore uses hardcoded values, not captured originals
 - **Severity:** Low
 - **Location:** `system/masquerade.py:14-18` — the disable path writes `ip_default_ttl=64` and `tcp_timestamps=1` unconditionally.
 - **Why it matters:** If the host's real default TTL/timestamps weren't those values, the "restore" is wrong.
@@ -202,19 +181,24 @@ Findings are grouped by category and ranked by severity within each group. Sever
 | — | Medium: `self.devices` iterated without the lock (dict-mutation crash) | `core/controller.py`, `ui/dashboard.py` | `97bc37b` → `Controller.snapshot_devices()` under the lock |
 | — | Medium: `_cut_ips`/`_mac_to_ip` mutated outside the lock | `network/traffic.py` | `499194e` → mutations moved under `self._lock` |
 | — | Medium: recon semaphore bound to the wrong event loop | `network/recon_engine.py` | `df666cd` → semaphore created inside the coroutine |
+| — | Medium: shell-string recon subprocess with interpolated IPs (injection) | `network/recon_engine.py` | `fb6ad05` → `create_subprocess_exec` + `ipaddress` validation |
+| — | Medium: `nft flush ruleset` wiped the host's whole firewall | `system/stealth.py` | `4fd71aa` → delete/recreate only the `hakai_stealth` table |
+| — | Medium: MITM kernel tuning applied as a side effect of detection | `system/netinfo.py`, `core/controller.py` | `a2c68db` → moved to explicit `engage_mitm()` called from `start()` |
+| — | Medium: `accept_redirects` restored from the wrong saved value | `system/netinfo.py` | `a2c68db` → capture/restore `_orig_accept_redirects` |
 
 ---
 
 ## Summary table (current)
 
-All Critical, High, and concurrency items are fixed (see §9). Remaining, highest first:
+All Critical, High, and Medium items are fixed (see §9). Remaining, highest first:
 
 | # | Severity | Category | Location |
 |---|----------|----------|----------|
-| 4.1 | Medium | Shell injection sink | `network/recon_engine.py:153,167` |
-| 4.2 | Medium | Destroys host firewall | `system/stealth.py:56` |
-| 5.1 | Medium | Side-effecting detection | `system/netinfo.py:156-178` |
-| 5.2 | Medium | Wrong restore | `system/netinfo.py:200-202` |
 | 2.1 | Low–Med | Edge-case crashes | `recon_engine.py:52`, `mdns_sniff.py:93` |
+| 2.2 | Low | Fake hostname stored | `network/scanner.py:70-71` |
+| 2.3 | Low | Stealth profile ignored | `core/controller.py:479-492` |
+| 2.4 | Low | IPv6 toggle one-way | `ui/dashboard.py:423-427` |
 | 3.1 | Low | Side-effecting classify | `core/persistence.py:546,655` |
-| 1.1, 2.2-2.4, 4.3, 5.3, 6.1, 7.x, 8.x | Low | Dead code / cross-platform / conventions / hygiene | see sections |
+| 4.1 | Low | Blanket `OUTPUT -j DROP` kill-switch | `core/protector.py:122-125` |
+| 5.1 | Low | Masquerade restore hardcoded | `system/masquerade.py:14-18` |
+| 6.1, 7.x, 8.x | Low | Cross-platform / dead code / conventions / hygiene | see sections |
