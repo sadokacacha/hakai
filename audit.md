@@ -162,8 +162,8 @@ Findings are grouped by category and ranked by severity within each group. Sever
 
 ### 8.1 Pervasive bare `except:` and broad `except Exception: pass`
 - **Severity:** Low (violates the project's stated conventions)
-- **Location (bare `except:`):** `network/arp.py:117, 329`; `network/deauth.py:113`; `network/ipv6.py:48, 66`; `core/persistence.py:206`. Plus dozens of `except Exception: pass` that swallow all errors (e.g. `core/controller.py:501`, `system/*`).
-- **Why it matters:** CLAUDE.md requires "No bare `except:`" and logging via `logging`. Silent catches are the direct cause of several bugs here being invisible (1.1, 3.3).
+- **Location (bare `except:`):** `network/arp.py:117, 329`; `network/deauth.py:113`; `network/ipv6.py:48, 66`. Plus dozens of `except Exception: pass` that swallow all errors (e.g. `core/controller.py:501`, `system/*`).
+- **Why it matters:** CLAUDE.md requires "No bare `except:`" and logging via `logging`. Silent catches are exactly what hid the two now-fixed silent failures (the DNS-spoof sniffer death and the recon-semaphore crash) — the same pattern is still masking errors elsewhere.
 - **Fix:** Catch specific exceptions and log via the `logging` module.
 
 ### 8.2 `print()` used for diagnostics in library code
