@@ -10,12 +10,14 @@ Interface is auto-detected at init() time — no hardcoded 'eth0'.
 """
 from __future__ import annotations
 
+import logging
 import shutil
 import subprocess
 import sys
 import threading
 
 _IS_WINDOWS = sys.platform == "win32"
+_log = logging.getLogger(__name__)
 
 
 def _tc(iface: str, *args, capture=True):
@@ -63,14 +65,14 @@ class TCManager:
         r = _tc(iface, "qdisc", "add", "root", "handle", "1:", "htb", "default", "1")
         if r.returncode != 0:
             self.last_error = r.stderr.strip()
-            print(f"[!] TC Init Error: {self.last_error}")
+            _log.error("TC init error: %s", self.last_error)
             return False
 
         # 3. Root class — effectively unlimited (1000 Mbit ceiling)
         r = _tc(iface, "class", "add", "parent", "1:", "classid", "1:1", "htb", "rate", "1000mbit")
         if r.returncode != 0:
             self.last_error = r.stderr.strip()
-            print(f"[!] TC Class Error: {self.last_error}")
+            _log.error("TC class error: %s", self.last_error)
             return False
 
         self._active  = True

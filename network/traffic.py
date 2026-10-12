@@ -20,12 +20,14 @@ except ImportError:
 
 
 import collections
+import logging
 import subprocess
 import sys
 import threading
 import time
 
 _IS_WINDOWS = sys.platform == "win32"
+_log = logging.getLogger(__name__)
 
 
 class TrafficCounter:
@@ -241,7 +243,7 @@ class TrafficCounter:
 
     def _scapy_loop(self):
         if not SCAPY_OK: return
-        print(f"[*] Traffic sniffer started on {self._iface}")
+        _log.info("Traffic sniffer started on %s", self._iface)
         while self._running:
             try:
                 # Use a small timeout to allow checking self._running
