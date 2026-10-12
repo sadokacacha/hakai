@@ -268,6 +268,16 @@ class Controller:
         if self.stealth_active:
             disengage_stealth(self.net.iface, self._orig_mac, self._orig_hn)
 
+    def snapshot_devices(self) -> list[Device]:
+        """Thread-safe copy of the current device list for safe iteration.
+
+        Sniffer-thread callbacks mutate self.devices under self._lock, so any
+        loop over it must iterate a snapshot, not the live dict — otherwise a
+        key added mid-iteration raises "dictionary changed size during iteration".
+        """
+        with self._lock:
+            return list(self.devices.values())
+
     # ── Scan ─────────────────────────────────────────────────────────────────
 
     def scan(self, log=None):
@@ -320,12 +330,13 @@ class Controller:
                     dev.identity = classify_device(dev)
 
         # Async hostname resolution for anything still missing
-        for ip, dev in self.devices.items():
+        for dev in self.snapshot_devices():
             if not dev.hostname or dev.hostname in ("-", ""):
-                resolve_hostname(ip)
+                resolve_hostname(dev.ip)
 
         # Auto-fingerprint & Deep Recon (Stages 2-6)
-        for ip in self.devices:
+        for dev in self.snapshot_devices():
+            ip = dev.ip
             if ip not in (self.net.my_ip, self.net.gateway):
                 if ip in new_ips:
                     self.fingerprint(ip, log=None)
@@ -555,8 +566,8 @@ class Controller:
             return msg
 
     def update_device_speeds(self):
-        for ip, dev in self.devices.items():
-            rx_s, tx_s, rx_t, tx_t = self.traffic.get(ip)
+        for dev in self.snapshot_devices():
+            rx_s, tx_s, rx_t, tx_t = self.traffic.get(dev.ip)
             dev.rx_speed = rx_s
             dev.tx_speed = tx_s
             dev.rx_total = rx_t

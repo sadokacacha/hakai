@@ -201,14 +201,19 @@ class Dashboard(ctk.CTk):
         self.ctrl.update_device_speeds()
         self.ctrl.flush_hostnames()
 
+        # Snapshot under the controller lock — sniffer threads mutate
+        # self.ctrl.devices concurrently, so iterating it live can raise
+        # "dictionary changed size during iteration".
+        devs_snapshot = self.ctrl.snapshot_devices()
+
         # Re-classify any device whose identity is still weak — fingerprinting
         # and mDNS intel fill in data asynchronously; this picks it up live.
         _weak = ("", "❓ Scanning...", "❓ Unknown", "Unknown", "?")
-        for dev in self.ctrl.devices.values():
+        for dev in devs_snapshot:
             if not dev.identity or dev.identity in _weak:
                 dev.identity = classify_device(dev)
 
-        current_ips = set(self.ctrl.devices.keys())
+        current_ips = {d.ip for d in devs_snapshot}
         for ip in list(self._rows.keys()):
             if ip not in current_ips:
                 self._rows[ip]["frame"].destroy()
@@ -220,7 +225,7 @@ class Dashboard(ctk.CTk):
             except (ValueError, AttributeError):
                 return [0, 0, 0, 0]
 
-        devs = sorted(self.ctrl.devices.values(), key=_ip_sort_key)
+        devs = sorted(devs_snapshot, key=_ip_sort_key)
         for i, d in enumerate(devs):
             if d.ip not in self._rows:
                 self._make_row(d.ip, d, i)
