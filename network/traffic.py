@@ -84,18 +84,19 @@ class TrafficCounter:
     def register_device(self, ip: str, mac: str):
         with self._lock:
             self._known_ips.add(ip)
-        if mac:
-            self._mac_to_ip[mac.lower()] = ip
+            if mac:
+                self._mac_to_ip[mac.lower()] = ip
 
 
     def mark_cut(self, ip: str):
-        self._cut_ips.add(ip)
         with self._lock:
+            self._cut_ips.add(ip)
             self._rx[ip] = collections.deque()
             self._tx[ip] = collections.deque()
 
     def unmark_cut(self, ip: str):
-        self._cut_ips.discard(ip)
+        with self._lock:
+            self._cut_ips.discard(ip)
 
     # ── Start / stop ────────────────────────────────────────────────────────
 
