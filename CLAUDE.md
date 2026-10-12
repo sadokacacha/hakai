@@ -1,0 +1,1 @@
+Do not edit any files. Read the whole codebase and write a findings report to audit.md. For each issue: severity, file:line, what's wrong, why it matters, and a suggested fix. Group by category, rank by severity.

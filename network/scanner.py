@@ -387,20 +387,58 @@ class Scanner:
             except Exception:
                 pass
 
-        # ── Layer 3: arp -n table ─────────────────────────────────────────
+        # ── Layer 3: arp table (cross-platform) ───────────────────────────
         if not found:
             try:
-                r = subprocess.run(["arp", "-n"], capture_output=True, text=True)
-                for line in r.stdout.splitlines()[1:]:
-                    pts = line.split()
-                    if len(pts) >= 3 and pts[2] != "(incomplete)":
-                        ip, mac = pts[0], pts[2]
-                        if ip in found:
-                            found[ip].mac = mac
-                            found[ip].vendor = lookup_oui(mac)
+                import sys as _sys
+                if _sys.platform == "win32":
+                    # Windows: `arp -a` — format is different from Linux `arp -n`
+                    # Lines look like:  "  192.168.1.1    88-c2-27-01-ff-74    dynamic"
+                    # Also has "Interface: x.x.x.x --- 0xN" header lines to skip
+                    r = subprocess.run(["arp", "-a"], capture_output=True, text=True)
+                    for line in r.stdout.splitlines():
+                        line = line.strip()
+                        # Skip blank lines, Interface: headers, and column headers
+                        if not line or line.startswith("Interface:") or "Internet Address" in line:
+                            continue
+                        pts = line.split()
+                        if len(pts) < 3:
+                            continue
+                        ip_str = pts[0]
+                        mac_str = pts[1]
+                        # Validate IP — must be x.x.x.x with all numeric octets
+                        if not re.match(r"^\d+\.\d+\.\d+\.\d+$", ip_str):
+                            continue
+                        # Skip multicast (224.x / 239.x) and broadcast (255.x)
+                        first_octet = int(ip_str.split(".")[0])
+                        if first_octet >= 224:
+                            continue
+                        # Skip all-ff broadcast MACs
+                        if mac_str.lower() in ("ff-ff-ff-ff-ff-ff", "ff:ff:ff:ff:ff:ff"):
+                            continue
+                        # Normalize dashes to colons (Windows uses 88-c2-27...)
+                        mac = mac_str.replace("-", ":").upper()
+                        if ip_str in found:
+                            found[ip_str].mac = mac
+                            found[ip_str].vendor = lookup_oui(mac)
                         else:
-                            found[ip] = Device(ip, mac=mac, vendor=lookup_oui(mac))
+                            found[ip_str] = Device(ip_str, mac=mac, vendor=lookup_oui(mac))
+                else:
+                    # Linux: `arp -n` — format: IP  HWtype  MAC  Flags  Iface
+                    r = subprocess.run(["arp", "-n"], capture_output=True, text=True)
+                    for line in r.stdout.splitlines()[1:]:
+                        pts = line.split()
+                        if len(pts) >= 3 and pts[2] != "(incomplete)":
+                            ip, mac = pts[0], pts[2]
+                            if not re.match(r"^\d+\.\d+\.\d+\.\d+$", ip):
+                                continue
+                            if ip in found:
+                                found[ip].mac = mac
+                                found[ip].vendor = lookup_oui(mac)
+                            else:
+                                found[ip] = Device(ip, mac=mac, vendor=lookup_oui(mac))
             except Exception:
                 pass
 
         return found
+

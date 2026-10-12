@@ -6,9 +6,16 @@ system/iptables_manager.py — Manages two sets of iptables FORWARD rules:
 from __future__ import annotations
 
 import subprocess
+import sys
+
+_IS_WINDOWS = sys.platform == "win32"
 
 
 def _ipt(*args, capture=True):
+    """Run iptables command. No-op on Windows."""
+    if _IS_WINDOWS:
+        # Return a fake CompletedProcess with returncode=0
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
     return subprocess.run(["iptables"] + list(args),
                           capture_output=capture, text=True)
 

@@ -21,8 +21,11 @@ except ImportError:
 
 import collections
 import subprocess
+import sys
 import threading
 import time
+
+_IS_WINDOWS = sys.platform == "win32"
 
 
 class TrafficCounter:
@@ -103,11 +106,12 @@ class TrafficCounter:
         self._my_ip  = my_ip
         self._my_mac = my_mac.lower()
 
-        # Force IP Forwarding (Essential for traffic funneling)
-        try:
-            subprocess.run(["sysctl", "-w", "net.ipv4.ip_forward=1"], capture_output=True)
-        except Exception:
-            pass
+        # Force IP Forwarding (Linux only)
+        if not _IS_WINDOWS:
+            try:
+                subprocess.run(["sysctl", "-w", "net.ipv4.ip_forward=1"], capture_output=True)
+            except Exception:
+                pass
 
         rx0, tx0 = self._read_proc(iface)
         self._iface_rx_prev = rx0
@@ -126,6 +130,9 @@ class TrafficCounter:
     # ── Layer 1: iptables byte counter poll ─────────────────────────────────
 
     def _ipt_loop(self):
+        """Poll iptables byte counters (Linux only)."""
+        if _IS_WINDOWS:
+            return  # iptables not available on Windows
         while self._running:
             time.sleep(self.IPT_POLL)
             with self._lock:
@@ -193,6 +200,9 @@ class TrafficCounter:
 
     @staticmethod
     def _read_proc(iface: str) -> tuple[int, int]:
+        """Read interface byte counters from /proc/net/dev (Linux only)."""
+        if _IS_WINDOWS:
+            return 0, 0
         try:
             with open("/proc/net/dev") as f:
                 for line in f:

@@ -9,21 +9,39 @@ import shutil
 import threading
 
 def _fix_sys_path():
-    sudo_user = os.getenv("SUDO_USER")
-    if sudo_user:
-        import pwd
-        user_home = pwd.getpwnam(sudo_user).pw_dir
-        version = f"{sys.version_info.major}.{sys.version_info.minor}"
-        user_site = os.path.join(user_home, f".local/lib/python{version}/site-packages")
-        if user_site not in sys.path:
-            sys.path.insert(0, user_site)
+    # Linux-only: fix site-packages path when running under sudo
+    if sys.platform != "win32":
+        sudo_user = os.getenv("SUDO_USER")
+        if sudo_user:
+            try:
+                import pwd
+                user_home = pwd.getpwnam(sudo_user).pw_dir
+                version = f"{sys.version_info.major}.{sys.version_info.minor}"
+                user_site = os.path.join(user_home, f".local/lib/python{version}/site-packages")
+                if user_site not in sys.path:
+                    sys.path.insert(0, user_site)
+            except Exception:
+                pass
 
 _fix_sys_path()
 
 def _check_root():
-    if os.geteuid() != 0:
-        print("[!] Hakai must run as root.  Use: sudo python3 main.py")
-        sys.exit(1)
+    if sys.platform == "win32":
+        # Windows: check for Administrator privileges via ctypes
+        try:
+            import ctypes
+            is_admin = ctypes.windll.shell32.IsUserAnAdmin()
+        except Exception:
+            is_admin = False
+        if not is_admin:
+            print("[!] WARNING: Hakai is not running as Administrator.")
+            print("    Network features (ARP, packet capture) require elevated privileges.")
+            print("    Right-click run.bat and select 'Run as Administrator' for full functionality.")
+    else:
+        # Linux/macOS: check for root via euid
+        if os.geteuid() != 0:
+            print("[!] Hakai must run as root.  Use: sudo python3 main.py")
+            sys.exit(1)
 
 def _check_deps():
     deps = {

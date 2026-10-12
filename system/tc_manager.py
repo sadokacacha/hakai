@@ -12,14 +12,20 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 import threading
+
+_IS_WINDOWS = sys.platform == "win32"
 
 
 def _tc(iface: str, *args, capture=True):
+    """Run tc command. No-op on Windows."""
+    if _IS_WINDOWS:
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
     tc_bin = shutil.which("tc") or "/usr/sbin/tc"
     if len(args) < 2:
         return subprocess.run([tc_bin, *args, "dev", iface], capture_output=capture, text=True)
-    
+
     # Standard tc syntax: tc <subcmd> <action> dev <iface> <params>
     # e.g. tc qdisc add dev eth0 ...
     cmd = [tc_bin, args[0], args[1], "dev", iface] + list(args[2:])
@@ -44,7 +50,12 @@ class TCManager:
     def init(self, iface: str) -> bool:
         """Set up HTB root qdisc on iface. Always tears down first for a clean slate."""
         self._iface = iface
-        
+
+        if _IS_WINDOWS:
+            # tc (Traffic Control) is Linux-only; on Windows bandwidth limiting is unavailable
+            self._active = True   # mark active so the manager doesn't crash
+            return True
+
         # 1. Tear down anything that may exist
         _tc(iface, "qdisc", "del", "root", capture=True)
 

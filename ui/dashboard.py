@@ -214,7 +214,13 @@ class Dashboard(ctk.CTk):
                 self._rows[ip]["frame"].destroy()
                 del self._rows[ip]
 
-        devs = sorted(self.ctrl.devices.values(), key=lambda d: [int(p) for p in d.ip.split(".")])
+        def _ip_sort_key(d):
+            try:
+                return [int(p) for p in d.ip.split(".")]
+            except (ValueError, AttributeError):
+                return [0, 0, 0, 0]
+
+        devs = sorted(self.ctrl.devices.values(), key=_ip_sort_key)
         for i, d in enumerate(devs):
             if d.ip not in self._rows:
                 self._make_row(d.ip, d, i)

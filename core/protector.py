@@ -2,10 +2,13 @@
 core/protector.py — Defensive engine for Hakai.
 Protects the attacker from being spoofed or tracked.
 """
+import sys
 import threading
 import time
 import subprocess
 from scapy.all import sniff, ARP, Ether
+
+_IS_WINDOWS = sys.platform == "win32"
 
 class Protector:
     def __init__(self, controller):
@@ -33,9 +36,11 @@ class Protector:
 
     def _self_healing_sentry(self):
         """
-        Polls /proc/net/arp every 500ms.
+        Polls /proc/net/arp every 500ms (Linux only).
         Ensures Gateway is ALWAYS NUD_PERMANENT (0x6).
         """
+        if _IS_WINDOWS:
+            return  # /proc/net/arp not available on Windows
         while self._running:
             if self.arp_guard_enabled and self.net.gateway:
                 try:
@@ -71,9 +76,12 @@ class Protector:
             if log: log("✕ Failed to resolve gateway MAC for ARP Guard", "err")
             return False
 
+        if _IS_WINDOWS:
+            if log: log("🛡️ ARP Guard not supported on Windows", "info")
+            return False
         try:
             # Set permanent neighbor entry
-            subprocess.run(["ip", "neigh", "replace", self.net.gateway, 
+            subprocess.run(["ip", "neigh", "replace", self.net.gateway,
                             "lladdr", self.gateway_mac, "dev", self.net.iface, "nud", "permanent"],
                            capture_output=True)
             self.arp_guard_enabled = True
@@ -85,6 +93,9 @@ class Protector:
 
     def disable_arp_guard(self, log=None):
         if not self.arp_guard_enabled: return
+        if _IS_WINDOWS:
+            self.arp_guard_enabled = False
+            return
         try:
             subprocess.run(["ip", "neigh", "del", self.net.gateway, "dev", self.net.iface], capture_output=True)
             self.arp_guard_enabled = False
@@ -103,14 +114,16 @@ class Protector:
 
     def disable_kill_switch(self, log=None):
         self.kill_switch_enabled = False
-        # Remove any block rules
-        subprocess.run(["iptables", "-D", "OUTPUT", "-j", "DROP"], capture_output=True)
+        if not _IS_WINDOWS:
+            # Remove any block rules (Linux only)
+            subprocess.run(["iptables", "-D", "OUTPUT", "-j", "DROP"], capture_output=True)
         if log: log("🚨 Kill-Switch DISARMED", "info")
 
     def _trigger_kill_switch(self):
         """Emergency network shutdown."""
-        subprocess.run(["iptables", "-I", "OUTPUT", "1", "-j", "DROP"], capture_output=True)
-        self.ctrl.stop() # Stop all operations
+        if not _IS_WINDOWS:
+            subprocess.run(["iptables", "-I", "OUTPUT", "1", "-j", "DROP"], capture_output=True)
+        self.ctrl.stop()  # Stop all operations
         # We don't log here directly to avoid threading issues, the monitor will handle it
 
     # ── Monitor Loop ─────────────────────────────────────────────────────────

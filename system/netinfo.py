@@ -1,6 +1,6 @@
 """
 system/netinfo.py — Auto-detect network interface, gateway, my IP, my MAC.
-Disables rp_filter for reliable ARP spoofing.
+Disables rp_filter for reliable ARP spoofing (Linux only).
 """
 from __future__ import annotations
 
@@ -8,7 +8,10 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 from dataclasses import dataclass, field
+
+_IS_WINDOWS = sys.platform == "win32"
 
 
 def _run(*cmd, timeout=5) -> str:
@@ -27,19 +30,78 @@ class NetInfo:
     my_mac:   str = ""
     subnet:   str = ""
     is_wifi:  bool = False
-    
-    # Original states for restoration
+
+    # Original states for restoration (Linux only)
     _orig_forwarding: str = "0"
     _orig_rp_filter:  str = "1"
     _orig_redirects:  str = "1"
     _orig_promisc:    bool = False
 
 
-def detect_network(preferred_iface: str = "auto") -> NetInfo:
-    """
-    Parse `ip route` for default gateway + interface,
-    `ip addr` for our IP, ioctl for our MAC.
-    """
+def _detect_network_windows() -> NetInfo:
+    """Detect network info on Windows using ipconfig /all + route print."""
+    info = NetInfo()
+
+    # ── Gateway via route print ───────────────────────────────────────────
+    route_out = _run("route", "print", "0.0.0.0")
+    # Look for:  0.0.0.0  0.0.0.0  <gateway>  <local_ip>
+    for line in route_out.splitlines():
+        m = re.search(r"0\.0\.0\.0\s+0\.0\.0\.0\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)", line)
+        if m:
+            info.gateway = m.group(1)
+            info.my_ip   = m.group(2)
+            break
+
+    if not info.my_ip:
+        # Fallback: socket trick
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            info.my_ip = s.getsockname()[0]
+            s.close()
+        except Exception:
+            pass
+
+    # ── ipconfig /all — find adapter with our IP ──────────────────────────
+    ipcfg = _run("ipconfig", "/all")
+    sections = re.split(r"\r?\n\r?\n", ipcfg)
+
+    for section in sections:
+        if info.my_ip and info.my_ip in section:
+            # Extract adapter name from section header (first non-blank line)
+            hdr_m = re.match(r"([^\r\n]+)", section.strip())
+            if hdr_m:
+                # e.g. "Ethernet adapter Wi-Fi:" or "Wireless LAN adapter Wi-Fi:"
+                adapter_raw = hdr_m.group(1).strip().rstrip(":")
+                info.iface = adapter_raw
+
+            # Extract MAC
+            mac_m = re.search(r"Physical Address[.\s]+:\s*([\w-]+)", section)
+            if mac_m:
+                info.my_mac = mac_m.group(1).replace("-", ":").upper()
+
+            # Extract subnet mask → prefix
+            mask_m = re.search(r"Subnet Mask[.\s]+:\s*(\d+\.\d+\.\d+\.\d+)", section)
+            if mask_m and info.my_ip:
+                mask = mask_m.group(1)
+                # Convert mask to prefix length
+                prefix = sum(bin(int(o)).count("1") for o in mask.split("."))
+                octets = info.my_ip.split(".")
+                mask_int = int(mask.replace(".", ""))
+                m_ints = [int(o) for o in mask.split(".")]
+                net_oc = [str(int(octets[i]) & m_ints[i]) for i in range(4)]
+                info.subnet = ".".join(net_oc) + f"/{prefix}"
+
+            # Detect WiFi
+            if re.search(r"wi.?fi|wireless|wlan|802\.11", section, re.IGNORECASE):
+                info.is_wifi = True
+            break
+
+    return info
+
+
+def _detect_network_linux(preferred_iface: str = "auto") -> NetInfo:
+    """Detect network info on Linux using ip route / ip addr."""
     info = NetInfo()
 
     # ── Gateway + iface ───────────────────────────────────────────────────
@@ -93,34 +155,24 @@ def detect_network(preferred_iface: str = "auto") -> NetInfo:
 
     # ── Capture and Tune Kernel for Godly MITM ────────────────────────────
     try:
-        # Capture original states
         info._orig_forwarding = _run("cat", "/proc/sys/net/ipv4/ip_forward").strip() or "0"
         info._orig_rp_filter  = _run("cat", "/proc/sys/net/ipv4/conf/all/rp_filter").strip() or "1"
         info._orig_redirects   = _run("cat", "/proc/sys/net/ipv4/conf/all/send_redirects").strip() or "1"
-        
+
         link_info = _run("ip", "link", "show", info.iface)
         info._orig_promisc = "PROMISC" in link_info
 
-        # Enable forwarding
         subprocess.run(["sysctl", "-w", "net.ipv4.ip_forward=1"], capture_output=True)
-        # Disable rp_filter (prevent dropping spoofed packets)
         subprocess.run(["sysctl", "-w", "net.ipv4.conf.all.rp_filter=0"], capture_output=True)
         subprocess.run(["sysctl", "-w", f"net.ipv4.conf.{info.iface}.rp_filter=0"], capture_output=True)
-        # Enable Proxy ARP
         subprocess.run(["sysctl", "-w", "net.ipv4.conf.all.proxy_arp=1"], capture_output=True)
-        # Disable sending/accepting local redirects
         subprocess.run(["sysctl", "-w", "net.ipv4.conf.all.send_redirects=0"], capture_output=True)
         subprocess.run(["sysctl", "-w", "net.ipv4.conf.all.accept_redirects=0"], capture_output=True)
-        
-        # Enable Promiscuous mode
         subprocess.run(["ip", "link", "set", info.iface, "promisc", "on"], capture_output=True)
-        
-        # Disable NIC Offloading (Ensure we see every packet individually)
+
         ethtool = shutil.which("ethtool")
         if ethtool:
-            # We don't restore these because it's hardware-dependent and often better off for sniffing
-            # But we only do it if we are sure we are in a high-performance scenario
-            subprocess.run([ethtool, "-K", info.iface, "gro", "off", "lro", "off", "tso", "off", "gso", "off"], 
+            subprocess.run([ethtool, "-K", info.iface, "gro", "off", "lro", "off", "tso", "off", "gso", "off"],
                            capture_output=True)
     except Exception:
         pass
@@ -128,22 +180,33 @@ def detect_network(preferred_iface: str = "auto") -> NetInfo:
     return info
 
 
+def detect_network(preferred_iface: str = "auto") -> NetInfo:
+    """
+    Auto-detect the active network interface, gateway, IP, MAC, and subnet.
+    Works on both Windows and Linux/macOS.
+    """
+    if _IS_WINDOWS:
+        return _detect_network_windows()
+    else:
+        return _detect_network_linux(preferred_iface)
+
+
 def restore_network(info: NetInfo):
-    """Reverts kernel changes to original states."""
-    if not info.iface: return
+    """Reverts kernel changes to original states (Linux only)."""
+    if _IS_WINDOWS or not info.iface:
+        return
     try:
         subprocess.run(["sysctl", "-w", f"net.ipv4.ip_forward={info._orig_forwarding}"], capture_output=True)
         subprocess.run(["sysctl", "-w", f"net.ipv4.conf.all.rp_filter={info._orig_rp_filter}"], capture_output=True)
         subprocess.run(["sysctl", "-w", f"net.ipv4.conf.all.send_redirects={info._orig_redirects}"], capture_output=True)
         subprocess.run(["sysctl", "-w", f"net.ipv4.conf.all.accept_redirects={info._orig_redirects}"], capture_output=True)
-        
+
         p_state = "on" if info._orig_promisc else "off"
         subprocess.run(["ip", "link", "set", info.iface, "promisc", p_state], capture_output=True)
-        
-        # Re-enable offloading (Standard defaults)
+
         ethtool = shutil.which("ethtool")
         if ethtool:
-            subprocess.run([ethtool, "-K", info.iface, "gro", "on", "lro", "on", "tso", "on", "gso", "on"], 
+            subprocess.run([ethtool, "-K", info.iface, "gro", "on", "lro", "on", "tso", "on", "gso", "on"],
                            capture_output=True)
     except Exception:
         pass
