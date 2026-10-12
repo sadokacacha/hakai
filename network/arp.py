@@ -117,7 +117,7 @@ class ArpManager:
                 os.killpg(os.getpgid(p.pid), signal.SIGTERM)
             except Exception:
                 try: p.terminate()
-                except: pass
+                except Exception: pass
 
         self._remove_drop(ip)
 
@@ -333,7 +333,7 @@ class ArpManager:
             old = self._procs.pop(ip, [])
         for p in old:
             try: os.killpg(os.getpgid(p.pid), signal.SIGTERM)
-            except: pass
+            except Exception: pass
 
         procs = []
         for target, spoof in [(ip, gateway), (gateway, ip)]:
