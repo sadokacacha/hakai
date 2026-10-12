@@ -12,7 +12,6 @@ from scapy.all import DNS, DNSRR, IP, UDP
 
 class ReconEngine:
     def __init__(self):
-        self.semaphore = asyncio.Semaphore(25)
         # Domain -> Device Class mapping
         self._domain_map = {
             "icloud.com": "Apple User", "apple.com": "Apple User",
@@ -25,7 +24,12 @@ class ReconEngine:
 
     async def run_recon(self, ip: str, gateway_ip: str) -> dict:
         """Executes parallel Stages 2-5 for a target node."""
-        async with self.semaphore:
+        # The semaphore must be created inside the running loop. run_deep_recon
+        # drives each call via asyncio.run() in its own worker thread (a fresh
+        # event loop per call), so a semaphore built in __init__ would be bound
+        # to a different loop and raise "got Future attached to a different loop".
+        semaphore = asyncio.Semaphore(25)
+        async with semaphore:
             tasks = [
                 self.get_ssl_cert_cn(ip),
                 self.get_upnp_friendly_name(ip),
