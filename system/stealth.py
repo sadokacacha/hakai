@@ -19,11 +19,15 @@ PROFILES = [
     {"name": "Samsung-Smart-TV",    "oui": "40:16:3b", "type": "TV"},
 ]
 
-def engage_mirage_cloak(interface="wlo1"):
+def engage_mirage_cloak(interface: str = "wlo1", profile_name: str | None = None):
     """
-    Tactical Cloak: Random Mirage Profile.
+    Tactical Cloak: apply the named Mirage profile, or a random one when
+    profile_name is empty/"RANDOM"/unknown.
     """
-    profile = random.choice(PROFILES)
+    if profile_name and profile_name != "RANDOM":
+        profile = next((p for p in PROFILES if p["name"] == profile_name), None) or random.choice(PROFILES)
+    else:
+        profile = random.choice(PROFILES)
     hostname = f"{profile['name']}-{random.randint(10,99)}"
     mac_prefix = profile['oui']
 

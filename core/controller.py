@@ -493,7 +493,7 @@ class Controller:
     def toggle_stealth(self, state: bool, profile: str = "RANDOM", log=None):
         if state == self.stealth_active: return True
         if state:
-            msg, new_mac = engage_mirage_cloak(self.net.iface)
+            msg, new_mac = engage_mirage_cloak(self.net.iface, profile)
             if new_mac:
                 self.net.my_mac = new_mac
                 self.stealth_active = True
