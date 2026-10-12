@@ -9,9 +9,10 @@ Findings are grouped by category and ranked by severity within each group. Sever
 - **Medium** — concurrency hazard, cross-platform break, or fragile logic that fails on common inputs.
 - **Low** — hygiene, dead code, cosmetic, convention violations.
 
-> **Note:** The two Critical crashes (`3fb70c4`) and all three High items (`8a83c7f`, `ae806e5`,
-> `da20e1b`) have been fixed and are no longer present in the code. They are recorded in §9.
-> The highest-severity remaining findings are **Medium**.
+> **Note:** All Critical items (`3fb70c4`), all three High items (`8a83c7f`, `ae806e5`,
+> `da20e1b`), and the three concurrency hazards (`97bc37b`, `499194e`, `df666cd`) are fixed and
+> no longer present. They are recorded in §9. The highest-severity remaining findings are the
+> **Medium** security / side-effect items in §4–§5.
 
 ---
 
@@ -58,27 +59,11 @@ Findings are grouped by category and ranked by severity within each group. Sever
 
 ## 3. Concurrency
 
-### 3.1 `self.devices` iterated without the lock while sniffer threads mutate it
-- **Severity:** Medium–High
-- **Location:** `core/controller.py:323` (`for ip, dev in self.devices.items()`), `:328` (`for ip in self.devices`), `:558` (`update_device_speeds`); plus `ui/dashboard.py:207` and `:223` (`self.ctrl.devices.values()`).
-- **What's wrong:** The intel-sniffer callbacks (`_on_intel_*`) add/modify `self.devices` under `self._lock`, but these loops iterate it with no lock held. Adding a key during iteration raises `RuntimeError: dictionary changed size during iteration`.
-- **Why it matters:** Intermittent crashes during an active scan while mDNS/DHCP intel is arriving — the busiest moments.
-- **Fix:** Snapshot under the lock before iterating: `with self._lock: items = list(self.devices.items())`. `cut_all`/`restore_all` already use `list(...)`; apply the same everywhere, including the UI refresh loop.
+> Fixed since last audit (now in §9): `self.devices` iterated without the lock (`97bc37b`),
+> `_cut_ips`/`_mac_to_ip` mutated outside the lock (`499194e`), and the `ReconEngine` semaphore
+> bound to the wrong event loop (`df666cd`).
 
-### 3.2 `_cut_ips` / `_mac_to_ip` mutated outside the lock
-- **Severity:** Medium
-- **Location:** `network/traffic.py:88` (`register_device` sets `_mac_to_ip` outside lock), `:92-98` (`mark_cut`/`unmark_cut` mutate `_cut_ips` outside lock) — while `_pkt` (`:274-305`) and `get` (`:338-348`) read them under the lock.
-- **Why it matters:** Mixed locked/unlocked access across the sniffer thread, the iptables poll thread and the UI thread → lost updates and transient-wrong cut/speed state.
-- **Fix:** Mutate `_cut_ips` / `_mac_to_ip` under `self._lock`.
-
-### 3.3 `ReconEngine.semaphore` is bound to the wrong event loop
-- **Severity:** Medium (deep recon effectively broken)
-- **Location:** `network/recon_engine.py:15` (`self.semaphore = asyncio.Semaphore(25)` at construction); used via `async with self.semaphore` in `run_recon` (`:28`), which runs under a fresh loop created by `asyncio.run(_run())` in `core/controller.py:246` — a new loop per device.
-- **What's wrong:** An `asyncio.Semaphore` created outside a running loop and awaited under a different `asyncio.run` loop raises `RuntimeError: ... attached to a different loop`.
-- **Why it matters:** `run_recon` raises and dies silently in the detached thread, so Stages 3–5 recon produce nothing with no error surfaced.
-- **Fix:** Create the semaphore inside the coroutine (per-loop), or run all recon on one persistent event loop/thread instead of `asyncio.run` per call.
-
-### 3.4 `classify_device` mutates `dev.confidence` as a side effect, called from many threads
+### 3.1 `classify_device` mutates `dev.confidence` as a side effect, called from many threads
 - **Severity:** Low
 - **Location:** `core/persistence.py:546, 655` set `dev.confidence`; invoked from controller callbacks, the scanner, and the UI refresh loop.
 - **Why it matters:** A "classify" helper that writes back into the device makes races harder to reason about and can momentarily report stale confidence.
@@ -214,21 +199,22 @@ Findings are grouped by category and ranked by severity within each group. Sever
 | — | High: DNS-spoof sniffer died permanently on first malformed packet | `network/dns_spoof.py` | `8a83c7f` → per-packet guard + try/except, sniff restart loop |
 | — | High: accounting `ACCEPT` could shadow cut `DROP` | `system/iptables_manager.py` | `ae806e5` → accounting rules appended (`-A`) below top-inserted DROP |
 | — | High: synchronous third-party MAC lookup (privacy + blocking) | `core/persistence.py` | `da20e1b` → removed `api.macvendors.com` fallback + `requests` import |
+| — | Medium: `self.devices` iterated without the lock (dict-mutation crash) | `core/controller.py`, `ui/dashboard.py` | `97bc37b` → `Controller.snapshot_devices()` under the lock |
+| — | Medium: `_cut_ips`/`_mac_to_ip` mutated outside the lock | `network/traffic.py` | `499194e` → mutations moved under `self._lock` |
+| — | Medium: recon semaphore bound to the wrong event loop | `network/recon_engine.py` | `df666cd` → semaphore created inside the coroutine |
 
 ---
 
 ## Summary table (current)
 
-All Critical and High items are fixed (see §9). Remaining, highest first:
+All Critical, High, and concurrency items are fixed (see §9). Remaining, highest first:
 
 | # | Severity | Category | Location |
 |---|----------|----------|----------|
-| 3.1 | Med–High | Concurrency crash | `core/controller.py:323,328,558`; `ui/dashboard.py:207,223` |
-| 3.2 | Medium | Concurrency | `network/traffic.py:88,92,98` |
-| 3.3 | Medium | Recon broken | `network/recon_engine.py:15`; `core/controller.py:246` |
 | 4.1 | Medium | Shell injection sink | `network/recon_engine.py:153,167` |
 | 4.2 | Medium | Destroys host firewall | `system/stealth.py:56` |
 | 5.1 | Medium | Side-effecting detection | `system/netinfo.py:156-178` |
 | 5.2 | Medium | Wrong restore | `system/netinfo.py:200-202` |
 | 2.1 | Low–Med | Edge-case crashes | `recon_engine.py:52`, `mdns_sniff.py:93` |
+| 3.1 | Low | Side-effecting classify | `core/persistence.py:546,655` |
 | 1.1, 2.2-2.4, 4.3, 5.3, 6.1, 7.x, 8.x | Low | Dead code / cross-platform / conventions / hygiene | see sections |
