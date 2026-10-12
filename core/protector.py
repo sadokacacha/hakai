@@ -115,14 +115,25 @@ class Protector:
     def disable_kill_switch(self, log=None):
         self.kill_switch_enabled = False
         if not _IS_WINDOWS:
-            # Remove any block rules (Linux only)
-            subprocess.run(["iptables", "-D", "OUTPUT", "-j", "DROP"], capture_output=True)
+            # Remove every copy of our own marked rule (Linux only); repeated
+            # triggers can insert duplicates, so delete until none remain.
+            for _ in range(10):
+                r = subprocess.run(
+                    ["iptables", "-D", "OUTPUT",
+                     "-m", "comment", "--comment", "hakai_killswitch", "-j", "DROP"],
+                    capture_output=True)
+                if r.returncode != 0:
+                    break
         if log: log("🚨 Kill-Switch DISARMED", "info")
 
     def _trigger_kill_switch(self):
         """Emergency network shutdown."""
         if not _IS_WINDOWS:
-            subprocess.run(["iptables", "-I", "OUTPUT", "1", "-j", "DROP"], capture_output=True)
+            # Marked so disable_kill_switch removes exactly our rule(s).
+            subprocess.run(
+                ["iptables", "-I", "OUTPUT", "1",
+                 "-m", "comment", "--comment", "hakai_killswitch", "-j", "DROP"],
+                capture_output=True)
         self.ctrl.stop()  # Stop all operations
         # We don't log here directly to avoid threading issues, the monitor will handle it
 
