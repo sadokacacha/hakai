@@ -64,7 +64,16 @@ def show_limit_dialog(parent, ip: str, dev, apply_cb, extra_ips: list = None):
     btn_row.pack(pady=14)
 
     def _apply():
-        apply_cb(ip, sv.get())
+        # IntVar.get() raises TclError on non-numeric input; also reject <= 0
+        # so a blank/garbage/negative value can't be passed to `tc` as a rate.
+        try:
+            kb = int(sv.get())
+        except (tk.TclError, ValueError):
+            kb = 0
+        if kb <= 0:
+            entry.configure(highlightbackground=RED, highlightcolor=RED)
+            return
+        apply_cb(ip, kb)
         dlg.destroy()
 
     tk.Button(btn_row, text="APPLY", command=_apply,
