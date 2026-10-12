@@ -90,7 +90,7 @@ def sniff_mdns_name(pkt, callback):
     dns = pkt.getlayer(DNS)
 
     # ── Scan question records (QD) ──────────────────────────────────────────
-    for i in range(dns.qdcount or 0):
+    for i in range((dns.qdcount or 0) if dns.qd else 0):
         try:
             qname_raw = dns.qd[i].qname.decode(errors="ignore").rstrip(".")
             qname = qname_raw.lower()

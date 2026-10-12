@@ -52,7 +52,8 @@ class ReconEngine:
     def analyze_dns(self, pkt) -> tuple[Optional[str], Optional[str]]:
         """Maps query domains to device classes."""
         if not pkt.haslayer(DNS) or pkt[DNS].qr != 0 or not pkt.haslayer(IP): return None, None
-        
+        if not pkt[DNS].qd: return None, None
+
         ip = pkt[IP].src
         qname = pkt[DNS].qd.qname.decode(errors="ignore").lower()
         
