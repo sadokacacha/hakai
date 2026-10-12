@@ -104,7 +104,7 @@ def show_info_dialog(parent, ip: str, dev, controller, fingerprint_done_cb=None)
         controller.fingerprint(ip, done_cb=_done)
 
     def do_reset_usage():
-        controller.reset_usage(ip)
+        controller.traffic.reset_usage(ip)
         rl.config(text=f"Usage counters reset for {ip}", fg=GREEN)
 
     row2 = tk.Frame(dlg, bg=PANEL); row2.pack(pady=2)

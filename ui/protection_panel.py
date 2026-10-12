@@ -44,7 +44,7 @@ def show_protection_panel(parent, ctrl, log_cb):
     frame_stl.pack(fill="x", padx=30, pady=10)
 
     prof_var = tk.StringVar(value="RANDOM")
-    prof_list = ["RANDOM"] + list(PROFILES.keys())
+    prof_list = ["RANDOM"] + [p["name"] for p in PROFILES]
     
     prof_cb = ttk.Combobox(frame_stl, textvariable=prof_var, values=prof_list, state="readonly", width=22)
     prof_cb.pack(pady=10)
