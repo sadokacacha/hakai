@@ -18,8 +18,11 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import threading
 import time
+
+_IS_WINDOWS = sys.platform == "win32"
 
 try:
     from scapy.all import ARP, Ether, srp, sendp
@@ -170,9 +173,12 @@ class ArpManager:
         for probe_ip, field in [(target_ip, "target_mac"), (gateway_ip, "gw_mac")]:
             # Try to force resolution by pinging if Scapy ARP fails
             try:
-                # Use system ping to force ARP table entry
-                subprocess.run(["ping", "-c", "1", "-W", "1", probe_ip],
-                               capture_output=True, timeout=2)
+                # Use system ping to force an ARP table entry (flags differ by OS).
+                if _IS_WINDOWS:
+                    ping_cmd = ["ping", "-n", "1", "-w", "1000", probe_ip]
+                else:
+                    ping_cmd = ["ping", "-c", "1", "-W", "1", probe_ip]
+                subprocess.run(ping_cmd, capture_output=True, timeout=2)
             except Exception:
                 pass
 
@@ -190,13 +196,14 @@ class ArpManager:
                 except Exception:
                     pass
             
-            # ARP Table fallback
+            # ARP Table fallback (Windows: `arp -a` uses dashes; Linux: `arp -n`)
             if (field == "target_mac" and not target_mac) or (field == "gw_mac" and not gw_mac):
                 try:
-                    r = subprocess.run(["arp", "-n", probe_ip], capture_output=True, text=True)
-                    m = re.search(r"(([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2})", r.stdout)
+                    arp_cmd = ["arp", "-a", probe_ip] if _IS_WINDOWS else ["arp", "-n", probe_ip]
+                    r = subprocess.run(arp_cmd, capture_output=True, text=True)
+                    m = re.search(r"(([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2})", r.stdout)
                     if m:
-                        mac = m.group(1)
+                        mac = m.group(1).replace("-", ":")
                         if field == "target_mac": target_mac = mac
                         else: gw_mac = mac
                 except Exception:
