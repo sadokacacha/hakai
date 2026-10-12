@@ -28,13 +28,19 @@ class IPTManager:
     # ── Accounting (byte counting) ─────────────────────────────────────────
 
     def add_accounting(self, ip: str):
-        """Insert FORWARD ACCEPT rules to count bytes for this IP (idempotent)."""
+        """Append FORWARD ACCEPT rules to count bytes for this IP (idempotent).
+
+        These rules are *appended* (-A), never inserted at the top: cut DROP
+        rules are inserted at FORWARD position 1, so appending guarantees a
+        DROP always precedes the accounting ACCEPT and a cut cannot be shadowed.
+        Byte counting is position-independent, so this does not affect totals.
+        """
         if ip in self._accounting:
             return
         for flag in ("-s", "-d"):
             chk = _ipt("-C", "FORWARD", flag, ip, "-j", "ACCEPT")
             if chk.returncode != 0:
-                _ipt("-I", "FORWARD", "1", flag, ip, "-j", "ACCEPT")
+                _ipt("-A", "FORWARD", flag, ip, "-j", "ACCEPT")
         self._accounting.add(ip)
 
     def remove_accounting(self, ip: str):
