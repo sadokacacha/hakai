@@ -5,7 +5,6 @@ All data stored in ~/.sadok_hakai/
 from __future__ import annotations
 
 import json
-import requests
 from pathlib import Path
 
 # ── Storage paths ──────────────────────────────────────────────────────────────
@@ -188,24 +187,17 @@ def is_private_mac(mac: str) -> bool:
 def lookup_oui(mac: str) -> str:
     if not mac:
         return ""
-    # if is_private_mac(mac):
-    #     return ""
-    
-    
+
     if _MAC_VENDOR_LIB and _mlookup is not None:
         try:
             return _mlookup.lookup(mac)
         except Exception:
             pass
-    
-    # Online API fallback
-    try:
-        res = requests.get(f"https://api.macvendors.com/{mac}", timeout=2)
-        if res.status_code == 200:
-            return res.text
-    except:
-        pass
-        
+
+    # Local static fallback only. The previous online lookup
+    # (https://api.macvendors.com) was removed: it leaked every LAN MAC to a
+    # third party and blocked the calling thread for up to 2 s per unknown
+    # device — and lookup_oui runs on the scan hot path and in Device.__init__.
     return _OUI_DB.get(mac.upper()[:8], "")
 
 def sync_vendor_db_bg():
