@@ -1,25 +1,49 @@
-# Spoofer — Python tool that spoofs <HWID/MAC/etc> for <target>
+# Hakai v3 — Python ARP/MITM network tool (Linux engine, cross-platform UI)
 
 ## Commands
 - Setup: python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
-- Run: python -m <your_entry_module>          # EDIT
+- Run: python main.py
 - Test: pytest -v
 - Lint: ruff check .
 - Format: ruff format .
 - Typecheck: mypy .
 
 ## Architecture
-- spoofer/        # core spoofing logic
-- spoofer/<sub>/  # <what it does>            # EDIT
-- utils/          # helpers, logging
-- tests/          # pytest suite
-- main.py         # entry point               # EDIT
+- main.py            # entry point, startup, network detect
+- core/              # orchestration + state
+  - controller.py    # central controller: scan/cut/restore, callbacks, device dict
+  - device.py        # Device model
+  - persistence.py   # device db, OUI lookup, state.json
+  - protector.py     # kill switch, ARP guard
+- network/           # packet layer (scapy)
+  - arp.py           # ARP spoof/cut/restore, gateway MAC resolve
+  - traffic.py       # traffic counters, cut tracking
+  - dns_spoof.py     # DNS spoof sniffer
+  - recon_engine.py  # async deep recon (stages 3-5)
+  - mdns_sniff.py    # mDNS intel
+  - scanner.py       # host discovery
+  - ipv6.py          # IPv6 hijack
+  - deauth.py, oui_lookup.py, xdp_engine.py
+- system/            # OS integration (mostly Linux)
+  - iptables_manager.py  # FORWARD accounting + drop rules
+  - stealth.py           # Mirage Cloak (nftables stealth profiles)
+  - netinfo.py           # network detect + sysctl/iface mutation
+  - tc_manager.py        # traffic shaping (tc)
+  - masquerade.py        # TTL / tcp_timestamps
+  - network_manager.py
+- ui/                # customtkinter UI
+  - dashboard.py         # main window, all toggles, device table
+  - info_dialog.py       # device info modal (ping/trace/fingerprint)
+  - protection_panel.py  # stealth + defensive toggles modal
+  - limit_dialog.py      # rate-limit entry
 
 ## Conventions
 - Type hints on every function signature.
-- No bare `except:` — catch specific exceptions.
-- Log via the `logging` module, never `print` in library code.
-- Pure functions where possible; keep side effects (hooking, syscalls) isolated.
+- No bare `except:` — catch specific exceptions and log via `logging`.
+- Never `print` in library code — use `logging`.
+- Validate network input with `ipaddress.ip_address()` before use.
+- Prefer subprocess arg lists over shell strings.
+- Keep side effects (syscalls, iptables, hooks) isolated from pure logic.
 
 ## Rules
 - Don't hedge. Give a direct answer.
@@ -33,11 +57,13 @@
 - Match existing style.
 
 ## Gotchas
-- Needs admin/root for most operations — handle missing elevation explicitly.
-- Target process must usually be closed before spoofing, reopened after.
-- Restore original values on exit, including on crash (atexit / try-finally).
+- Needs root for iptables/tc/sysctl/nft.
+- iptables FORWARD is first-match-wins — DROP must precede ACCEPT or cuts silently fail.
+- Restore ALL original values on exit (sysctl, iptables, nft, iface), including on crash.
+- Detection (netinfo) must not mutate kernel state.
+- Linux-only engine; Windows paths no-op silently — make that explicit.
 - Watch for handle leaks on repeated spoof/unspoof cycles.
 
 ## Audit workflow
 - Audit first: write findings to audit.md, no edits.
-- Then fix in batches by severity, run tests after each, commit when green.
+- Then fix in batches by severity, run lint + tests after each, commit when green.
