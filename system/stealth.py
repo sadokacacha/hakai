@@ -53,7 +53,10 @@ def engage_mirage_cloak(interface="wlo1"):
     # 4. Engage Ghost Firewall (Silent-Drop) after 1s grace period
     time.sleep(1)
     try:
-        subprocess.run(["nft", "flush", "ruleset"], check=True)
+        # Remove only our own table (if present); never flush the global
+        # ruleset — that would destroy the host's existing firewall config
+        # with no way to restore it.
+        subprocess.run(["nft", "delete", "table", "inet", "hakai_stealth"], capture_output=True)
         subprocess.run(["nft", "add", "table", "inet", "hakai_stealth"], check=True)
         subprocess.run(["nft", "add", "chain", "inet", "hakai_stealth", "input", 
                        "{ type filter hook input priority 0; policy drop; }"], check=True)
