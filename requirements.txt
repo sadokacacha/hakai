@@ -1,4 +1,10 @@
 scapy>=2.5.0
 customtkinter>=5.2.0
 Pillow>=10.0.0
-requests>=2.31.0
+
+# ── Optional (imported behind try/except; the app degrades gracefully) ──
+# Richer OUI/vendor resolution:
+#   mac-vendor-lookup
+#   ouilookup
+# Linux-only XDP packet drop (needs BCC + clang/kernel headers):
+#   bcc
