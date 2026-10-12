@@ -62,15 +62,10 @@ def resolve_hostname(ip: str) -> str:
             except Exception:
                 pass
         
-        # Super last resort: Port Probe (80, 443, 22)
-        if not hn:
-            try:
-                for port in [80, 443, 22]:
-                    with socket.create_connection((ip, port), timeout=0.5) as s:
-                        hn = f"Device (Port:{port} Open)"
-                        break
-            except Exception:
-                pass
+        # NOTE: no port-probe fallback here. A synthetic string like
+        # "Device (Port:80 Open)" is not a hostname and must not land in the
+        # hostname cache — port-based *identity* hints are handled separately
+        # by guess_identity_from_ports()/flush_hostnames().
 
         with _hn_lock:
             _hn_cache[ip] = hn
