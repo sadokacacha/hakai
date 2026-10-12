@@ -32,10 +32,11 @@ class NetInfo:
     is_wifi:  bool = False
 
     # Original states for restoration (Linux only)
-    _orig_forwarding: str = "0"
-    _orig_rp_filter:  str = "1"
-    _orig_redirects:  str = "1"
-    _orig_promisc:    bool = False
+    _orig_forwarding:        str = "0"
+    _orig_rp_filter:         str = "1"
+    _orig_redirects:         str = "1"
+    _orig_accept_redirects:  str = "1"
+    _orig_promisc:           bool = False
 
 
 def _detect_network_windows() -> NetInfo:
@@ -153,15 +154,33 @@ def _detect_network_linux(preferred_iface: str = "auto") -> NetInfo:
         out = _run(iw, "dev")
         info.is_wifi = info.iface in out
 
-    # ── Capture and Tune Kernel for Godly MITM ────────────────────────────
+    # ── Capture original kernel/NIC state (read-only) ─────────────────────
+    # Detection must not mutate anything — the actual MITM tuning happens in
+    # engage_mitm(), called explicitly when the engine starts.
     try:
-        info._orig_forwarding = _run("cat", "/proc/sys/net/ipv4/ip_forward").strip() or "0"
-        info._orig_rp_filter  = _run("cat", "/proc/sys/net/ipv4/conf/all/rp_filter").strip() or "1"
-        info._orig_redirects   = _run("cat", "/proc/sys/net/ipv4/conf/all/send_redirects").strip() or "1"
+        info._orig_forwarding       = _run("cat", "/proc/sys/net/ipv4/ip_forward").strip() or "0"
+        info._orig_rp_filter        = _run("cat", "/proc/sys/net/ipv4/conf/all/rp_filter").strip() or "1"
+        info._orig_redirects        = _run("cat", "/proc/sys/net/ipv4/conf/all/send_redirects").strip() or "1"
+        info._orig_accept_redirects = _run("cat", "/proc/sys/net/ipv4/conf/all/accept_redirects").strip() or "1"
 
         link_info = _run("ip", "link", "show", info.iface)
         info._orig_promisc = "PROMISC" in link_info
+    except Exception:
+        pass
 
+    return info
+
+
+def engage_mitm(info: NetInfo):
+    """Apply the kernel/NIC changes needed for MITM (Linux only).
+
+    Called explicitly when the engine starts — NOT as a side effect of
+    detection — so merely detecting the network leaves the host untouched.
+    Originals are captured in detect_network(); restore_network() reverts these.
+    """
+    if _IS_WINDOWS or not info.iface:
+        return
+    try:
         subprocess.run(["sysctl", "-w", "net.ipv4.ip_forward=1"], capture_output=True)
         subprocess.run(["sysctl", "-w", "net.ipv4.conf.all.rp_filter=0"], capture_output=True)
         subprocess.run(["sysctl", "-w", f"net.ipv4.conf.{info.iface}.rp_filter=0"], capture_output=True)
@@ -176,8 +195,6 @@ def _detect_network_linux(preferred_iface: str = "auto") -> NetInfo:
                            capture_output=True)
     except Exception:
         pass
-
-    return info
 
 
 def detect_network(preferred_iface: str = "auto") -> NetInfo:
@@ -199,7 +216,7 @@ def restore_network(info: NetInfo):
         subprocess.run(["sysctl", "-w", f"net.ipv4.ip_forward={info._orig_forwarding}"], capture_output=True)
         subprocess.run(["sysctl", "-w", f"net.ipv4.conf.all.rp_filter={info._orig_rp_filter}"], capture_output=True)
         subprocess.run(["sysctl", "-w", f"net.ipv4.conf.all.send_redirects={info._orig_redirects}"], capture_output=True)
-        subprocess.run(["sysctl", "-w", f"net.ipv4.conf.all.accept_redirects={info._orig_redirects}"], capture_output=True)
+        subprocess.run(["sysctl", "-w", f"net.ipv4.conf.all.accept_redirects={info._orig_accept_redirects}"], capture_output=True)
 
         p_state = "on" if info._orig_promisc else "off"
         subprocess.run(["ip", "link", "set", info.iface, "promisc", p_state], capture_output=True)

@@ -23,7 +23,7 @@ from network.fingerprint import fingerprint_device
 from core.protector import Protector
 from system.iptables_manager import IPTManager
 from system.tc_manager import TCManager
-from system.netinfo import NetInfo
+from system.netinfo import NetInfo, engage_mitm
 # Legacy imports removed
 from system.firewall_apex import GhostFirewall
 from system.masquerade import apply_stack_masquerade
@@ -70,6 +70,9 @@ class Controller:
     def start(self):
         """Bootstrap the engine."""
         self._running = True
+        # Apply MITM kernel/NIC tuning here (explicit engage), not as a side
+        # effect of network detection. restore_network() reverts it on stop().
+        engage_mitm(self.net)
         self.traffic.start(self.net.iface, self.net.my_ip, self.net.my_mac)
         self.scanner.start_passive_discovery(self.net.iface)
         self.protector.start()
