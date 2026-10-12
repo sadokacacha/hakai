@@ -3,6 +3,7 @@ network/recon_engine.py — Sovereign Zero-Visibility Recon Engine.
 """
 from __future__ import annotations
 import asyncio
+import ipaddress
 import socket
 import re
 import ssl
@@ -153,9 +154,17 @@ class ReconEngine:
 
     # ── Stage 4: Reverse DNS (PTR) ───────────────────────────────────
     async def get_ptr_record(self, ip: str, dns_server: str) -> str:
+        # Validate both values as IP addresses before they reach the command
+        # line, and run without a shell, so network-derived data can't be
+        # interpreted as shell syntax (this process runs as root).
         try:
-            proc = await asyncio.create_subprocess_shell(
-                f"dig @{dns_server} -x {ip} +short",
+            ipaddress.ip_address(ip)
+            ipaddress.ip_address(dns_server)
+        except ValueError:
+            return ""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "dig", f"@{dns_server}", "-x", ip, "+short",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
@@ -168,8 +177,8 @@ class ReconEngine:
     # ── Stage 5: IPv6 Neighbor Correlation ───────────────────────────
     async def get_ipv6_neighbor(self, ip: str) -> str:
         try:
-            proc = await asyncio.create_subprocess_shell(
-                f"ip -6 neigh show",
+            proc = await asyncio.create_subprocess_exec(
+                "ip", "-6", "neigh", "show",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
