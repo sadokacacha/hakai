@@ -2,14 +2,14 @@
 network/recon_engine.py — Sovereign Zero-Visibility Recon Engine.
 """
 from __future__ import annotations
+
 import asyncio
 import ipaddress
-import socket
 import re
 import ssl
-import xml.etree.ElementTree as ET
-from typing import Optional, Tuple
-from scapy.all import DNS, DNSRR, IP, UDP
+
+from scapy.all import DNS, IP
+
 
 class ReconEngine:
     def __init__(self):
@@ -49,7 +49,7 @@ class ReconEngine:
             }
 
     # ── Stage 1: DNS Traffic Analysis (Passive Correlation) ───────────
-    def analyze_dns(self, pkt) -> tuple[Optional[str], Optional[str]]:
+    def analyze_dns(self, pkt) -> tuple[str | None, str | None]:
         """Maps query domains to device classes."""
         if not pkt.haslayer(DNS) or pkt[DNS].qr != 0 or not pkt.haslayer(IP): return None, None
         if not pkt[DNS].qd: return None, None
@@ -100,7 +100,6 @@ class ReconEngine:
             try:
                 # In a real environment, we'd look for the Location header from SSDP
                 # Here we probe common paths
-                url = f"http://{ip}:{port}/description.xml"
                 # Simplified fetch using asyncio
                 # (Normally we'd use aiohttp, but let's stick to standard libs)
                 reader, writer = await asyncio.wait_for(

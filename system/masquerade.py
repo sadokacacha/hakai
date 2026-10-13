@@ -3,6 +3,7 @@ system/masquerade.py — TCP/IP Stack Fingerprint Obfuscation.
 Status: [CHAMELEON: ACTIVE]
 """
 from __future__ import annotations
+
 import subprocess
 
 _KEYS = ("net.ipv4.ip_default_ttl", "net.ipv4.tcp_window_scaling", "net.ipv4.tcp_timestamps")
@@ -36,4 +37,4 @@ def apply_stack_masquerade(enable: bool) -> str:
 
         return "[DNA_MATCH: 99% (Windows 11 Mimic)]" if enable else "[DNA: NATIVE]"
     except Exception as e:
-        return f"[ERROR: STACK_SPOOF_FAIL - {str(e)}]"
+        return f"[ERROR: STACK_SPOOF_FAIL - {e!s}]"

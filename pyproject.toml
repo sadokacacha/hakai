@@ -1,0 +1,65 @@
+# Hakai v3 — tooling configuration.
+#
+# Pins the lint/format/type/test rule sets so `ruff check .`, `ruff format`,
+# `mypy .` and `pytest` behave identically for everyone instead of inheriting
+# ruff's broad shifting defaults. The selection targets real defects (pyflakes,
+# import hygiene, pyupgrade) without forcing the whole-repo reformat the
+# aligned-constant style would otherwise trigger.
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+exclude = ["venv", ".venv", "scratch"]
+
+[tool.ruff.lint]
+# E4/E7/E9 = import/statement/runtime errors; F = pyflakes (unused, undefined);
+# I = import sorting; UP = pyupgrade; RUF = ruff-specific correctness.
+# E501 (line length) is deliberately omitted: the codebase uses column-aligned
+# assignments on purpose. BLE001/S110 are omitted too — best-effort `except`
+# blocks around privileged syscalls are intentional here.
+select = ["E4", "E7", "E9", "F", "I", "UP", "RUF"]
+ignore = [
+    "E701",   # `if cond: stmt` — the project's pervasive, intentional inline style
+    "E702",   # multiple statements on one line (semicolon) — same inline style
+    "E402",   # module import not at top — deliberate late/lazy imports (main.py, scapy)
+    "E741",   # ambiguous variable name 'l' — used for throwaway tk labels
+    "RUF001", # ambiguous unicode in the emoji-heavy UI strings
+    "RUF002",
+    "RUF003",
+    "RUF005", # list concatenation (`[x] + list(y)`) reads clearly for arg building
+]
+# E722 (bare except) stays enabled — it enforces the CLAUDE.md "no bare except" rule.
+
+[tool.ruff.lint.per-file-ignores]
+# `from ui.theme import *` is the established pattern for colour/font constants.
+"ui/*" = ["F403", "F405"]
+"__init__.py" = ["F401"]
+"tests/*" = ["F841"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# conftest.py puts the project root on sys.path so `import core`, etc. resolve.
+
+[tool.mypy]
+python_version = "3.13"
+# Pragmatic settings: the project is not fully annotated yet, so run in a
+# non-strict mode that still catches real type errors without drowning in
+# missing-stub noise from scapy / customtkinter.
+ignore_missing_imports = true
+exclude = ["venv/", "scratch/"]
+warn_redundant_casts = true
+
+# scapy.all exposes protocol classes (IP, UDP, ARP, Dot11, BOOTP, DHCP, …)
+# dynamically, so mypy reports them as missing attributes even though they
+# exist at runtime. The same modules also call Unix-only os/fcntl members
+# (killpg, getpgid, setsid, ioctl) that are absent from the Windows typeshed
+# but present on the Linux target. Both are environment/library artifacts, not
+# type bugs, so attr-defined is disabled for the packet-layer modules.
+[[tool.mypy.overrides]]
+module = [
+    "network.*",
+    "core.controller",
+    "core.protector",
+    "system.netinfo",
+]
+disable_error_code = ["attr-defined"]

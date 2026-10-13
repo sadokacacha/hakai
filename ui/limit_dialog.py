@@ -4,12 +4,11 @@ ui/limit_dialog.py — Per-device bandwidth limit slider dialog.
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk
 
 from ui.theme import *
 
 
-def show_limit_dialog(parent, ip: str, dev, apply_cb, extra_ips: list = None):
+def show_limit_dialog(parent, ip: str, dev, apply_cb, extra_ips: list | None = None):
     """
     Opens a modal dialog with an entry to set bandwidth limit (KB/s).
     apply_cb(ip, kb) is called when the user clicks APPLY.

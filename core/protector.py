@@ -2,11 +2,12 @@
 core/protector.py — Defensive engine for Hakai.
 Protects the attacker from being spoofed or tracked.
 """
+import subprocess
 import sys
 import threading
 import time
-import subprocess
-from scapy.all import sniff, ARP, Ether
+
+from scapy.all import ARP, sniff
 
 _IS_WINDOWS = sys.platform == "win32"
 
@@ -44,7 +45,7 @@ class Protector:
         while self._running:
             if self.arp_guard_enabled and self.net.gateway:
                 try:
-                    with open("/proc/net/arp", "r") as f:
+                    with open("/proc/net/arp") as f:
                         lines = f.readlines()[1:]
                         for line in lines:
                             parts = line.split()

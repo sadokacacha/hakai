@@ -4,8 +4,8 @@ network/xdp_engine.py — High-Performance Packet Nullification via eBPF XDP.
 Drops packets at the NIC driver level (RX path) for zero-CPU "Cuts."
 This bypasses the entire Linux networking stack (iptables/nftables).
 """
-import os
-import subprocess
+
+from typing import Any
 
 # The eBPF C program to be loaded into the NIC.
 XDP_PROGRAM_C = r"""
@@ -55,7 +55,7 @@ class XDPEngine:
     def __init__(self, iface: str):
         self.iface = iface
         self._loaded = False
-        self._bpf = None
+        self._bpf: Any = None
 
     def load(self):
         """Loads the XDP program using BCC (if installed)."""
@@ -72,7 +72,8 @@ class XDPEngine:
 
     def add_drop(self, ip: str):
         if not self._loaded: return
-        import socket, struct
+        import socket
+        import struct
         try:
             # key must be in network byte order (big-endian) for the eBPF code
             key = socket.inet_aton(ip)
@@ -82,7 +83,7 @@ class XDPEngine:
 
     def remove_drop(self, ip: str):
         if not self._loaded: return
-        import socket, struct
+        import socket
         try:
             key = socket.inet_aton(ip)
             del self._bpf["drop_ips"][key]

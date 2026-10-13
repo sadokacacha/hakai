@@ -9,7 +9,7 @@ import shutil
 import socket
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 _IS_WINDOWS = sys.platform == "win32"
 
@@ -131,12 +131,13 @@ def _detect_network_linux(preferred_iface: str = "auto") -> NetInfo:
         prefix     = int(m.group(2))
         octets = info.my_ip.split(".")
         mask   = (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF
-        net_oc = [str((int(octets[i]) & ((mask >> (24 - 8*i)) & 0xFF))) for i in range(4)]
+        net_oc = [str(int(octets[i]) & ((mask >> (24 - 8*i)) & 0xFF)) for i in range(4)]
         info.subnet = ".".join(net_oc) + f"/{prefix}"
 
     # ── My MAC (ioctl SIOCGIFHWADDR) ──────────────────────────────────────
     try:
-        import fcntl, struct
+        import fcntl
+        import struct
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             raw = fcntl.ioctl(s.fileno(), 0x8927,

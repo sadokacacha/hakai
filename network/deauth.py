@@ -22,14 +22,15 @@ import shutil
 import subprocess
 import threading
 import time
-from scapy.all import (
-    RadioTap, Dot11, Dot11Auth,
-    sendp
-)
 
 try:
+    from scapy.all import Dot11, Dot11Auth, RadioTap, sendp
+
     SCAPY_WIFI_OK = True
 except ImportError:
+    # Scapy's 802.11 layer (Dot11) is optional — without it, deauth degrades
+    # to a no-op instead of crashing the whole app at import time.
+    Dot11 = Dot11Auth = RadioTap = sendp = None  # type: ignore[assignment]
     SCAPY_WIFI_OK = False
 
 

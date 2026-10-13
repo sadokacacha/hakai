@@ -1,8 +1,9 @@
 """
 system/network_manager.py — Static IP & DNS config via nmcli.
 """
-import subprocess
 import shutil
+import subprocess
+
 
 def get_connections() -> list[str]:
     """Returns a list of active NetworkManager connection names."""

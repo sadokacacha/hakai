@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import threading
 import tkinter as tk
 
 from core.persistence import fmt_speed, fmt_total
@@ -82,7 +83,7 @@ def show_info_dialog(parent, ip: str, dev, controller, fingerprint_done_cb=None)
             lines = r.stdout.strip().split("\n")
             result = lines[-1] if lines else "No response"
             dlg.after(0, lambda: rl.config(text=result, fg=TEAL))
-        import threading; threading.Thread(target=_go, daemon=True).start()
+        threading.Thread(target=_go, daemon=True).start()
 
     def do_traceroute():
         cmd = shutil.which("traceroute") or shutil.which("tracepath")
@@ -90,9 +91,9 @@ def show_info_dialog(parent, ip: str, dev, controller, fingerprint_done_cb=None)
             rl.config(text="traceroute not found", fg=RED); return
         rl.config(text="Running traceroute… (see log)", fg=MUTED)
         def _go():
-            r = subprocess.run([cmd, ip], capture_output=True, text=True, timeout=25)
+            subprocess.run([cmd, ip], capture_output=True, text=True, timeout=25)
             dlg.after(0, lambda: rl.config(text="Traceroute done — see main log", fg=TEAL))
-        import threading; threading.Thread(target=_go, daemon=True).start()
+        threading.Thread(target=_go, daemon=True).start()
 
     def do_fingerprint():
         rl.config(text=f"Fingerprinting {ip}…", fg=AMBER)

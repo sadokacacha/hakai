@@ -10,7 +10,9 @@ from __future__ import annotations
 import subprocess
 import threading
 import time
-from scapy.all import IP, UDP, DNS, DNSRR, send
+
+from scapy.all import DNS, DNSRR, IP, UDP, send
+
 
 class DnsSpoofManager:
     def __init__(self):

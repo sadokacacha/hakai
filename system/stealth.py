@@ -2,9 +2,8 @@
 system/stealth.py — The Sovereign Mirage Engine.
 Randomizes host identity across mobile, PC, and TV profiles.
 """
-import subprocess
 import random
-import os
+import subprocess
 import time
 
 PROFILES = [

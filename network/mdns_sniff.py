@@ -7,9 +7,10 @@ Linux Avahi announcements so most modern devices get identified without
 needing a full port scan.
 """
 from __future__ import annotations
-from scapy.all import DNS, DNSRR, IP
-from core.persistence import sanitize_mdns_name as _sanitize
 
+from scapy.all import DNS, IP
+
+from core.persistence import sanitize_mdns_name as _sanitize
 
 # Maps service-type substrings to human-readable OS/class labels
 _SERVICE_MAP = [

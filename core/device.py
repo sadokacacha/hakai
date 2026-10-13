@@ -3,8 +3,8 @@ core/device.py — Rich Device model with full state tracking.
 """
 from __future__ import annotations
 
-import subprocess
 from datetime import datetime
+
 from core.persistence import db, lookup_oui
 
 

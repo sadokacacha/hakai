@@ -4,35 +4,41 @@ Thread-safe, event-driven, clean start/stop.
 """
 from __future__ import annotations
 
-import threading
 import asyncio
 import socket
+import threading
 import time
 from datetime import datetime
-from typing import Optional
 
 from core.device import Device
-from core.persistence import db, classify_device, sanitize_mdns_name, sanitize_vendor, _is_junk_hostname
-from network.scanner import Scanner, flush_hostnames, resolve_hostname
-from network.arp import ArpManager
-from network.traffic import TrafficCounter
-from network.dns_spoof import DnsSpoofManager
-from network.ipv6 import IPv6Hijacker
-from network.xdp_engine import XDPEngine
-from network.fingerprint import fingerprint_device
+from core.persistence import (
+    _is_junk_hostname,
+    classify_device,
+    db,
+    sanitize_mdns_name,
+    sanitize_vendor,
+)
 from core.protector import Protector
-from system.iptables_manager import IPTManager
-from system.tc_manager import TCManager
-from system.netinfo import NetInfo, engage_mitm
-# Legacy imports removed
-from system.firewall_apex import GhostFirewall
-from system.masquerade import apply_stack_masquerade
-from system.chameleon import toggle_chameleon
+from network.arp import ArpManager
 from network.dhcp_sniffer import sniff_dhcp_os
+from network.dns_spoof import DnsSpoofManager
+from network.fingerprint import fingerprint_device
+from network.ipv6 import IPv6Hijacker
 from network.mdns_sniff import sniff_mdns_name
 from network.oui_lookup import get_vendor
-from system.stealth import engage_mirage_cloak, disengage_stealth
 from network.recon_engine import ReconEngine
+from network.scanner import Scanner, flush_hostnames, resolve_hostname
+from network.traffic import TrafficCounter
+from network.xdp_engine import XDPEngine
+from system.chameleon import toggle_chameleon
+
+# Legacy imports removed
+from system.firewall_apex import GhostFirewall
+from system.iptables_manager import IPTManager
+from system.masquerade import apply_stack_masquerade
+from system.netinfo import NetInfo, engage_mitm
+from system.stealth import disengage_stealth, engage_mirage_cloak
+from system.tc_manager import TCManager
 
 
 class Controller:
@@ -114,7 +120,7 @@ class Controller:
                 win = pkt[TCP].window if pkt.haslayer(TCP) else 0
                 self._on_intel_tcp_found(pkt[IP].src, ttl, win)
 
-        from scapy.all import sniff, IP, TCP
+        from scapy.all import IP, TCP, sniff
         def _loop():
             while self._running:
                 try:

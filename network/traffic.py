@@ -12,10 +12,10 @@ Direction (iptables):
 from __future__ import annotations
 
 try:
-    from scapy.all import AsyncSniffer, IP, IPv6, Ether, sniff
+    from scapy.all import IP, AsyncSniffer, Ether, IPv6, sniff
     SCAPY_OK = True
 except ImportError:
-    AsyncSniffer = IP = Ether = sniff = None
+    AsyncSniffer = IP = Ether = sniff = None  # type: ignore[assignment,misc]
     SCAPY_OK = False
 
 

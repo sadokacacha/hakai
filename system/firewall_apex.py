@@ -3,7 +3,9 @@ system/firewall_apex.py — Sovereign nftables logic.
 Status: [SHIELDS: LOCKED]
 """
 from __future__ import annotations
+
 import subprocess
+
 
 class GhostFirewall:
     def __init__(self):
@@ -36,7 +38,7 @@ class GhostFirewall:
             else:
                 self.active = False
                 return "[SHIELDS: DISENGAGED]"
-        except subprocess.CalledProcessError as e:
-            return f"[ERROR: FIREWALL_FAIL - Check permissions]"
+        except subprocess.CalledProcessError:
+            return "[ERROR: FIREWALL_FAIL - Check permissions]"
         except Exception as e:
-            return f"[ERROR: {str(e)}]"
+            return f"[ERROR: {e!s}]"

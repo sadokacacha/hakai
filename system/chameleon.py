@@ -3,7 +3,9 @@ system/chameleon.py — Traffic Padding & Signature Obfuscation.
 Status: [EVASION: ACTIVE]
 """
 from __future__ import annotations
+
 import subprocess
+
 
 def toggle_chameleon(iface: str, enable: bool) -> str:
     """
@@ -26,4 +28,4 @@ def toggle_chameleon(iface: str, enable: bool) -> str:
 
         return "[EVASION: ACTIVE]" if enable else "[EVASION: DISABLED]"
     except Exception as e:
-        return f"[ERROR: CHAMELEON_FAIL - {str(e)}]"
+        return f"[ERROR: CHAMELEON_FAIL - {e!s}]"

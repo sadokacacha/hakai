@@ -2,6 +2,7 @@
 from types import SimpleNamespace
 
 from core.persistence import (
+    _is_junk_hostname,
     classify_device,
     fmt_mbps,
     fmt_speed,
@@ -10,7 +11,6 @@ from core.persistence import (
     is_stealth_mac,
     sanitize_mdns_name,
     sanitize_vendor,
-    _is_junk_hostname,
 )
 
 

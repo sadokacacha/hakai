@@ -2,10 +2,12 @@
 ui/protection_panel.py — Modal for Defensive & Stealth settings.
 """
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
-from ui.theme import *
+from tkinter import messagebox, simpledialog, ttk
+
+from system.network_manager import apply_static_config, get_connections, set_dhcp
 from system.stealth import PROFILES
-from system.network_manager import get_connections, apply_static_config, set_dhcp
+from ui.theme import *
+
 
 def show_protection_panel(parent, ctrl, log_cb):
     dlg = tk.Toplevel(parent)

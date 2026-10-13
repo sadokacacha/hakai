@@ -1,6 +1,10 @@
-scapy>=2.5.0
+# scapy floor is 2.7.0: versions <2.7.0 carry an unsafe-deserialization RCE
+# (GHSA-cq46-m9x9-j8w2) triggerable via a malicious session file.
+scapy>=2.7.0
 customtkinter>=5.2.0
-Pillow>=10.0.0
+# Pillow floor is 11.0.0 to stay clear of the image-parsing CVEs fixed across
+# the 10.x line (icon loading uses PIL.Image).
+Pillow>=11.0.0
 
 # ── Optional (imported behind try/except; the app degrades gracefully) ──
 # Richer OUI/vendor resolution:

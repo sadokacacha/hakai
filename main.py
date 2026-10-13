@@ -4,9 +4,10 @@ main.py — Hakai v3 entry point.
 Run with:  sudo python3 main.py
 """
 import os
-import sys
 import shutil
+import sys
 import threading
+
 
 def _fix_sys_path():
     # Linux-only: fix site-packages path when running under sudo
@@ -60,9 +61,9 @@ def _check_deps():
 _check_root()
 _check_deps()
 
-from system.netinfo import detect_network
 from core.controller import Controller
 from core.persistence import db, sync_vendor_db_bg
+from system.netinfo import detect_network
 from ui.dashboard import Dashboard
 
 
@@ -74,10 +75,10 @@ def main():
     # ── Set up WiFi deauth if wireless iface detected ─────────────────────────
     if net.is_wifi and net.iface:
         try:
-            from network.deauth import DeauthManager
-            from scapy.all import Dot11   # probe scapy wifi support
             # Try to detect AP BSSID from default gateway
             import subprocess
+
+            from network.deauth import DeauthManager
             r = subprocess.run(
                 ["iw", "dev", net.iface, "link"],
                 capture_output=True, text=True)

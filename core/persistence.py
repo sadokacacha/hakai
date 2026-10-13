@@ -452,14 +452,14 @@ def _clean_identity_candidate(label: str) -> str:
 def _class_from_services(services: dict[int, str] | list | tuple | None) -> str:
     if not services:
         return ""
+    items: list[tuple[int, str]] = []
     if isinstance(services, dict):
-        items = services.items()
+        items = list(services.items())
         ports = set(services.keys())
         text = " ".join(str(v) for v in services.values()).lower()
     else:
         ports = set()
         text = " ".join(str(v) for v in services).lower()
-        items = []
 
     if any(p in ports for p in _PRINT_PORTS) or "printer" in text or "ipp" in text:
         return "Printer"

@@ -3,16 +3,19 @@ ui/dashboard.py — Sovereign Apex Edition (Persistent Architecture)
 Framework: customtkinter
 """
 from __future__ import annotations
+
 import os
 import threading
-import time
-import customtkinter as ctk
 from datetime import datetime
-from tkinter import messagebox, simpledialog
+from tkinter import simpledialog
 
-from core.persistence import fmt_speed, fmt_total, fmt_mbps, classify_device, db
-from ui.theme import *
+import customtkinter as ctk
+
+from core.persistence import classify_device, fmt_total
+from ui.info_dialog import show_info_dialog
 from ui.limit_dialog import show_limit_dialog
+from ui.protection_panel import show_protection_panel
+from ui.theme import *
 
 COLS = [
     ("●", 30), ("IP ADDRESS", 140), ("IDENTITY", 320),
@@ -79,7 +82,12 @@ class Dashboard(ctk.CTk):
                                       anchor="w", height=45, command=self.show_aegis)
         self.btn_aegis.pack(fill="x", padx=20, pady=5)
 
-        self.status_box = ctk.CTkTextbox(self.sidebar, height=180, width=200, 
+        self.btn_protect = ctk.CTkButton(self.sidebar, text="🛡  PROTECTION", font=FONT_HEADER,
+                                         fg_color="transparent", text_color=TEXT, hover_color=SEL,
+                                         anchor="w", height=45, command=self._open_protection)
+        self.btn_protect.pack(fill="x", padx=20, pady=5)
+
+        self.status_box = ctk.CTkTextbox(self.sidebar, height=180, width=200,
                                          font=(FONT_MONO[0], 10), fg_color="#000", border_width=0)
         self.status_box.pack(side="bottom", pady=20, padx=15)
 
@@ -197,7 +205,6 @@ class Dashboard(ctk.CTk):
     # ── Refresh Loop ────────────────────────────────────────────────────────
 
     def _refresh_loop(self):
-        from core.persistence import classify_device
         self.ctrl.update_device_speeds()
         self.ctrl.flush_hostnames()
 
@@ -241,13 +248,15 @@ class Dashboard(ctk.CTk):
         row.pack(fill="x", pady=1)
         row.pack_propagate(False)
         row.bind("<Button-1>", lambda e, _ip=ip: self._select(_ip, e))
-        
+        row.bind("<Double-Button-1>", lambda e, _ip=ip: self._open_info(_ip))
+
         lbls = {}
         def _lbl(txt, w, col=TEXT):
             l = ctk.CTkLabel(row, text=str(txt), width=w, font=FONT_MONO, text_color=col, anchor="w")
             l.pack(side="left", padx=5)
             # Return "break" to stop the event from bubbling up to the row frame.
             l.bind("<Button-1>", lambda e, _ip=ip: (self._select(_ip, e), "break")[-1])
+            l.bind("<Double-Button-1>", lambda e, _ip=ip: (self._open_info(_ip), "break")[-1])
             return l
 
         lbls["dot"] = _lbl("●", 30, GREEN)
@@ -271,7 +280,6 @@ class Dashboard(ctk.CTk):
             for lbl in rd["labels"].values():
                 if lbl.winfo_exists(): lbl.configure(fg_color=row_bg)
 
-            rx_s, tx_s, _, _ = self.ctrl.traffic.get(ip)
             sess_rx, sess_tx  = self.ctrl.traffic.get_usage(ip)
             mode              = self.ctrl.traffic.get_mode(ip)  # 'MITM' or 'PASSIVE'
 
@@ -406,6 +414,18 @@ class Dashboard(ctk.CTk):
             dev.identity = "" # Force re-classification to update UI immediately
             self.log_tactical(f"Renamed {ip} to '{dev.nickname}'" if dev.nickname else f"Cleared nickname for {ip}", "info")
             self._update_row(ip)
+
+    def _open_info(self, ip):
+        """Open the per-device Info popup (ping / traceroute / fingerprint / reset)."""
+        dev = self.ctrl.devices.get(ip)
+        if not dev:
+            return
+        show_info_dialog(self, ip, dev, self.ctrl,
+                         fingerprint_done_cb=lambda i, d: self._update_row(i))
+
+    def _open_protection(self):
+        """Open the Protection & Stealth modal."""
+        show_protection_panel(self, self.ctrl, self.log_tactical)
 
     def _toggle_nuclear(self):
         state = self.nuclear_switch.get()

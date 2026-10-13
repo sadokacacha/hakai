@@ -15,7 +15,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from core.device import Device
-from core.persistence import lookup_oui, sanitize_mdns_name, _is_junk_hostname
+from core.persistence import _is_junk_hostname, lookup_oui, sanitize_mdns_name
 
 # ── Hostname resolver pool ─────────────────────────────────────────────────────
 _hn_cache: dict[str, str] = {}
@@ -91,7 +91,7 @@ def guess_identity_from_ports(ip: str) -> str:
     ]
     for port, label in signatures:
         try:
-            with socket.create_connection((ip, port), timeout=0.3) as s:
+            with socket.create_connection((ip, port), timeout=0.3):
                 return label
         except Exception:
             continue
@@ -146,7 +146,7 @@ def flush_hostnames(devices: dict):
     """Copy resolved hostnames from cache into device objects (call before render)."""
     with _hn_lock:
         for ip, dev in devices.items():
-            if ip in _hn_cache and _hn_cache[ip]:
+            if _hn_cache.get(ip):
                 cached = _hn_cache[ip]
                 # Sanitize before applying — strip mDNS/Bonjour noise
                 clean = sanitize_mdns_name(cached)
@@ -170,7 +170,7 @@ class Scanner:
         self.subnet = subnet
         self._hn_cache: dict[str, str] = {}
         self._running = False
-        self._passive_thread = None
+        self._passive_thread: threading.Thread | None = None
 
     def start_passive_discovery(self, iface: str):
         """Start listening for mDNS/SSDP/NBNS to discover identities without scanning."""
@@ -185,7 +185,7 @@ class Scanner:
         self._running = False
 
     def _passive_sniff(self, iface: str):
-        from scapy.all import sniff, UDP, DNS, DNSQR, NBNSQueryRequest, IP, IPv6
+        from scapy.all import DNS, IP, UDP, IPv6, NBNSQueryRequest, sniff
         
         def _get_ip(pkt):
             if pkt.haslayer(IP): return pkt[IP].src
@@ -243,7 +243,7 @@ class Scanner:
 
             # 5. DHCP (UDP 67/68) — extract Option 12 hostname
             try:
-                from scapy.all import BOOTP, DHCP, Ether
+                from scapy.all import BOOTP, DHCP
                 if pkt.haslayer(DHCP):
                     requested_ip = ""
                     bootp_ip = ""
@@ -364,13 +364,13 @@ class Scanner:
         if not found:
             try:
                 from scapy.all import ARP, Ether, srp
-                kwargs = {"timeout": 3, "verbose": False}
+                kwargs: dict[str, object] = {"timeout": 3, "verbose": False}
                 if iface:
                     kwargs["iface"] = iface
                 answered, _ = srp(
                     Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst=self.subnet),
                     filter="arp",
-                    **kwargs)
+                    **kwargs)  # type: ignore[arg-type]
                 for _, rcv in answered:
                     ip  = rcv.psrc
                     mac = rcv.hwsrc

@@ -5,14 +5,24 @@ Exploits the IPv6 blind spot by telling targets we are their default IPv6 router
 This allows us to intercept traffic even if IPv4 is guarded by ARP Inspection (DAI).
 """
 from __future__ import annotations
+
 import threading
 import time
+
 from scapy.all import (
-    Ether, IPv6, ICMPv6ND_RA, ICMPv6NDOptPrefixInfo, 
-    UDP, DHCP6_Advertise, DHCP6_Reply, DHCP6_Solicit, 
-    DHCP6OptDNSServers, DHCP6OptIA_NA, DHCP6OptServerId, 
-    sniff, sendp
+    UDP,
+    DHCP6_Advertise,
+    DHCP6_Solicit,
+    DHCP6OptDNSServers,
+    DHCP6OptServerId,
+    Ether,
+    ICMPv6ND_RA,
+    ICMPv6NDOptPrefixInfo,
+    IPv6,
+    sendp,
+    sniff,
 )
+
 
 class IPv6Hijacker:
     def __init__(self, iface: str, my_mac: str):

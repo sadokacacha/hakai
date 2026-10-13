@@ -9,7 +9,8 @@ Both are passed to the controller via callbacks so devices with
 randomised MACs still get named/classified correctly.
 """
 from __future__ import annotations
-from scapy.all import BOOTP, DHCP, Ether, IP
+
+from scapy.all import BOOTP, DHCP, IP, Ether
 
 
 def sniff_dhcp_os(pkt, os_cb, hostname_cb=None):

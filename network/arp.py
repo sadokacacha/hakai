@@ -25,7 +25,7 @@ import time
 _IS_WINDOWS = sys.platform == "win32"
 
 try:
-    from scapy.all import ARP, Ether, srp, sendp
+    from scapy.all import ARP, Ether, sendp, srp
     SCAPY_OK = True
 except ImportError:
     SCAPY_OK = False
@@ -158,7 +158,8 @@ class ArpManager:
 
         # Our MAC via ioctl
         try:
-            import fcntl, struct
+            import fcntl
+            import struct
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             try:
                 raw = fcntl.ioctl(s.fileno(), 0x8927,
