@@ -283,15 +283,134 @@ failed read can't masquerade as a real captured original.
 not pretend privileged ops succeed, so the "Windows no-op" check passes here.
 IPv6 gateway is not detected by `netinfo` — that is a scope gap, not a bug.
 
-**Limits:** restoration correctness is proven only against a mocked
+**Limits (netinfo):** restoration correctness is proven only against a mocked
 `subprocess`. Real-host verification (that the kernel actually returns to the
 captured values) still requires a root Linux session and is unverified here.
 `restore_network` now returns a success bool, but `controller.stop()` does not
 yet consume it — surfacing that to the UI is a later-phase item.
 
-Verification (this batch):
-`pytest -q` → **26 passed** (22 + 4 new) · `ruff check` changed files → clean ·
-`ruff format` changed files → clean · `mypy .` → no issues (40 files).
+Verification (netinfo batch):
+`pytest -q` → **26 passed** (22 + 4 new) · `ruff check` / `ruff format` on
+changed files → clean · `mypy .` → no issues (40 files).
+
+### `network/arp.py` — RESOLVED (2 fixed) + 3 documented
+
+| ID | Sev | Location | Status |
+|----|-----|----------|--------|
+| ARP-1 | High | `_start_flood` / `_start_arpspoof` / `_watchdog` | **Fixed** |
+| ARP-2 | Medium | `cut` / `spoof` | **Fixed** |
+| ARP-3 | Medium | `cut` return value | Documented (cross-file) |
+| ARP-4 | Low | `_apply_drop` TOCTOU | Documented |
+| ARP-5 | Medium | Windows unguarded iptables/sysctl | Documented (scope) |
+
+**ARP-1 — Restore/watchdog race leaks poisoning threads & processes (defeats
+restore).** `restore(ip)` pops the IP from `_cut_ips` but does **not** stop the
+watchdog. The watchdog (`_watchdog`) snapshots `_cut_ips`, then — without
+re-checking — calls `_start_flood` / `_start_arpspoof` for each entry. If
+`restore()` pops the IP after the snapshot, the watchdog restarts the Scapy
+flood and the `arpspoof` binary for an IP no longer being cut. Worse,
+`_start_arpspoof` only recorded its spawned procs *if* `ip in _cut_ips` — so on
+this race the processes were spawned but never tracked and never killed: they
+**keep ARP-poisoning after the device was "restored".** *Evidence:* old
+`_start_arpspoof` checked membership only after `Popen`; `_start_flood` had no
+membership check; `_watchdog` had no stale-entry guard.
+*Fix:* membership guard at the start of `_start_flood` and `_start_arpspoof`
+(under `_lock`); `_start_arpspoof` now kills any procs spawned if the IP was
+removed mid-spawn; `_watchdog` re-checks `ip in _cut_ips` under the lock before
+re-arming. *Regression:* `test_start_arpspoof_no_leak_when_not_cut`,
+`test_start_flood_no_leak_when_not_cut`.
+
+**ARP-2 — No IP validation before root commands.** `cut`/`spoof` passed `ip`
+and `gateway` straight into `iptables -I FORWARD`, `arpspoof`, `ping`, `arp -n`
+(all as root) with no `ipaddress` check — against the AGENTS.md/CLAUDE.md
+convention. (Argument lists mean no shell injection, but the convention exists
+and an unvalidated value is a silent-failure/hardening gap.) *Fix:* module-level
+`_valid_ip()`; `cut`/`spoof` return False before issuing any command on invalid
+input. *Regression:* `test_cut_rejects_invalid_ip` / `_gateway` /
+`test_spoof_rejects_invalid_ip`.
+
+**ARP-3 (documented, cross-file) — Misleading cut result.** `cut()` returns the
+`spoof()` result, which is False when the target MAC can't be resolved — but the
+L1 iptables DROP was already applied, so the device **is** cut while the UI logs
+"ARP resolution failed (target not reachable)". The honest fix spans
+`controller.cut_device` (distinguish "dropped at L1 but not poisoning" from
+"failed"); deferred to the controller's Phase-2 pass to keep this batch single-file.
+
+**ARP-4 (documented) — `_apply_drop` check-then-insert TOCTOU.** `-C` then `-I`
+is not atomic and runs outside `_lock`; concurrent `cut`+watchdog on the *same*
+IP could duplicate the DROP rule. Low likelihood (watchdog sleeps first; per-IP
+rules rarely collide) and `-C` mitigates most cases; `_remove_drop` clears up to
+3 duplicates. Noted, not fixed.
+
+**ARP-5 (documented, scope) — Windows.** `_apply_drop`/`_remove_drop`/`spoof`
+call `iptables`/`sysctl` with no `_IS_WINDOWS` guard, so on Windows they raise
+`FileNotFoundError` rather than failing explicitly. The engine is Linux-only;
+making Windows *explicitly* unsupported (vs. `iptables_manager`'s silent fake-
+success) is a cross-platform consistency decision for Phase 4/6, not a
+reliability fix for the Linux target.
+
+**Limits (arp):** the leak fix is verified by the deterministic entry-guard
+invariant (mocked `Popen`/no real threads), which is what the watchdog relies
+on. The *timing* race itself is narrowed to a microsecond window, not formally
+proven absent under live concurrency. ARP-3/4/5 remain open as documented.
+
+Verification (arp batch):
+`pytest -q` → **31 passed** (+5 arp tests) · `ruff check` / `ruff format` on
+changed files → clean · `mypy network/arp.py` → clean.
+
+---
+
+## Tool & Dependency Tribunal — 2026-11-19 (Phase 3)
+
+Matrix only — no dependency or config changes made in this phase. Evidence is
+measured (usage counts via grep, icon size, Tk version, installed versions),
+not guessed. Where a true performance benchmark wasn't feasible in this
+environment (e.g. scapy vs a rewritten raw-socket engine), that is stated
+rather than invented.
+
+Installed: scapy 2.8.0, customtkinter 6.0.0, Pillow 12.3.0, pytest 9.1.1,
+ruff 0.17.0, mypy 2.4.0, Python 3.14.8, Tk 8.6.
+
+### Runtime dependencies
+
+| Existing | Candidate | Existing weakness | Candidate advantage | Compatibility | Migration cost | Performance | Maintenance | Verdict |
+|---|---|---|---|---|---|---|---|---|
+| **scapy 2.8.0** | raw sockets / libpcap / pyroute2 | heavy import; dynamic `scapy.all` symbols defeat mypy `attr-defined` | stdlib sockets = zero deps | used at 15 sites, ~24 layers (ARP, Dot11, DHCP, DNS, ICMPv6, NBNS…) | very high — would reimplement the entire packet engine | scapy send/sniff is slower than raw, but no measured bottleneck | actively maintained, pinned ≥2.7.0 for GHSA-cq46 | **KEEP** |
+| **customtkinter 6.0.0** | raw tkinter/ttk (stdlib); PySide6; Dear PyGui | only `dashboard.py` uses it — the 3 dialogs already use stdlib `tkinter`, so the toolkit is **mixed** | ttk removes a dep; Qt is far richer | ctk widgets ≠ tk widgets; theming differs | medium (one window) to high (full Qt) | adequate for this scale | maintained; smaller community than Qt | **KEEP** — but the mixed ctk/tk toolkit is a real smell for the Phase-6 UI rebuild |
+| **Pillow 12.3.0** | stdlib `tkinter.PhotoImage(...).subsample(16)` or a pre-sized 64px asset | whole image library pulled in for **one** call | zero deps; Tk 8.6 reads PNG natively | icon is exactly 1024→64 = `subsample(16)` (integer factor, works) | low (one call + ship a 64px icon) | subsample is nearest-neighbour — slightly worse icon quality than PIL resize | maintained, pinned ≥11 for CVEs | **INVESTIGATE** — removable; defer to the Phase-6 asset pass (quality trade-off is a design call) |
+
+### System tools (external binaries)
+
+| Existing | Candidate | Existing weakness | Candidate advantage | Compat | Migration | Perf | Maint | Verdict |
+|---|---|---|---|---|---|---|---|---|
+| **iptables** (12 call sites) | nftables; pyroute2 | app uses *both* iptables and nft → dual firewall stacks | one backend, netlink-native | core to cut/accounting/REDIRECT | high | fine | stable; iptables-nft shim ubiquitous | **KEEP** — consolidation is a Phase-4 architecture call, not a swap |
+| **nftables** (10 call sites) | iptables | only the evasion modules (`stealth`, `firewall_apex`) use it; overlaps iptables role | — | fine | — | fine | stable | **KEEP** (evasion modules are out of the reliability scope anyway) |
+| **tc** (3 sites) | pyroute2 (tc via netlink) | string-built HTB commands, fragile parsing | typed netlink, no shell parse | core to bandwidth limit | medium | equivalent | iproute2 ubiquitous | **KEEP** |
+| **XDP/eBPF via `bcc`** (1 site, optional) | remove layer; libbpf/bpftool | **redundant** — drops the same cut traffic iptables FORWARD DROP already drops; needs clang+kernel headers | near-zero-CPU drop | optional, degrades to no-op | low to remove | best, but unneeded given iptables | bcc heavy, slower-moving | **INVESTIGATE** — redundant drop layer; keep only if it earns its weight in Phase-7, else REMOVE |
+
+### Optional OUI libraries (redundancy)
+
+| Existing | Weakness | Verdict |
+|---|---|---|
+| `mac_vendor_lookup` (persistence.py) **and** `ouilookup` (oui_lookup.py) **and** two static dicts (`_OUI_DB`, `FALLBACK_OUI`) | **four** overlapping vendor-lookup mechanisms across two modules | **INVESTIGATE → likely REMOVE one lib + merge the dicts in Phase 4** (dedupe). grep confirms `mac_vendor_lookup`=1 ref, `ouilookup`=1 ref, both single-module. |
+
+### Dev tooling — doing work, or decorative?
+
+| Tool | Config | Doing real work? |
+|---|---|---|
+| **ruff 0.17.0** | `select = E4/E7/E9/F/I/UP/RUF`, E722 on, targeted ignores | **Yes.** Catches unused/undefined/import-order/pyupgrade defects; E722 enforces the CLAUDE.md no-bare-except rule. Config is justified, not decorative. **KEEP** |
+| **pytest 9.1.1** | `testpaths=["tests"]` + `conftest.py` path shim | **Yes**, functional. 26 tests collected. Most older tests are pure-function assertions (would run under unittest too) but pytest is the right tool. **KEEP** |
+| **mypy 2.4.0** | `ignore_missing_imports=true`, `attr-defined` disabled for `network.*`/`controller`/`protector`/`netinfo`, untyped bodies unchecked by default | **Partially decorative.** The packet engine — exactly where scapy-shape bugs hide — gets almost no checking: `attr-defined` is off there and most functions are unannotated so their bodies are skipped (14 `annotation-unchecked` notes). It does validate typed modules. **KEEP**, but it is under-powered; a later batch should add annotations + `check_untyped_defs` to specific modules rather than disable the one error code that matters. Honest status: green mypy here is a weak signal for the engine. |
+
+### Summary
+
+- **KEEP (no change):** scapy, customtkinter, iptables, nftables, tc, pytest, ruff.
+- **INVESTIGATE:** Pillow (single-use, removable — Phase 6), XDP/`bcc`
+  (redundant drop — Phase 7), the 4-way OUI redundancy (dedupe — Phase 4).
+- **No REPLACE / no hard REMOVE this phase** → no migration/rollback plans or
+  removal greps required yet; the INVESTIGATE items carry their deferral phase.
+- **mypy config** is the one piece of tooling whose green status over-promises;
+  flagged for strengthening, not removal.
 
 ---
 
