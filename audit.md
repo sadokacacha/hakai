@@ -623,6 +623,67 @@ polling loops are not exercised against real traffic.
 
 ---
 
+### `core/persistence.py` — RESOLVED (4 fixed) + 2 documented
+
+| ID | Sev | Location | Status |
+|----|-----|----------|--------|
+| PERS-1 | Medium | `_save` | **Fixed** |
+| PERS-2 | Low-Med | `Persistence` singleton | **Fixed** |
+| PERS-5 | Low | import-time `mkdir` | **Fixed** |
+| PERS-6 | Low | `_load` swallows errors | **Fixed** |
+| PERS-3 | Low | `save_state` iterates caller's live dict | Documented |
+| PERS-4 | Low | `sync_vendor_db_bg` swallows network errors | Documented |
+
+**PERS-1 — Non-atomic save → silent total state loss.** `_save` did
+`path.write_text(json.dumps(data))`, which truncates then writes; an interrupted
+or concurrent write leaves a truncated/corrupt JSON file, and `_load`'s broad
+`except` then silently discards it and returns defaults — so a crash mid-save
+loses all nicknames/config/state with no warning. *Fix:* serialize first, write
+a `.tmp`, then `os.replace()` (atomic rename on the same filesystem); clean up
+the temp and `return False`/log on failure. *Regression:* `test_save_load_roundtrip`,
+`test_save_atomic_preserves_original_on_replace_failure` (original survives a
+failed replace), `test_save_rejects_unserializable`.
+
+**PERS-2 — Singleton not thread-safe.** `db` is read (`get_nickname` from the
+sniffer and UI-refresh threads) and written (`set_nickname`/`save_config`) with
+no lock; `json.dumps` over a dict being mutated concurrently can raise, and two
+saves to one file could interleave. *Fix:* a `threading.Lock` guards the mutate+
+save in `save_config`/`set_nickname`, and `_save` is handed a `dict(...)`
+snapshot; the atomic `os.replace` makes concurrent saves last-writer-wins
+cleanly. (The lock itself is robustness, not unit-race-tested.)
+
+**PERS-5 — Import-time crash.** `CONFIG_DIR.mkdir(...)` ran unguarded at import,
+so a read-only home crashed the whole app on `import core.persistence`. *Fix:*
+wrapped in `try/except OSError` with a warning; `_save` reports failure later.
+
+**PERS-6 — Silent corrupt-config reset.** `_load`'s `except Exception: pass`
+reset a corrupt/unreadable file to defaults with no trace. *Fix:* narrowed to
+`OSError`/`ValueError` and logs a warning naming the file. *Regression:*
+`test_load_corrupt_returns_default`, `test_load_missing_returns_default`.
+
+**PERS-3 (documented) — `save_state` now snapshots** the devices dict
+(`list(devices.items())`) so a concurrent mutation can't raise mid-build; the
+caller (`controller`) still owns the dict's locking.
+
+**PERS-4 (documented) — `sync_vendor_db_bg`** swallows network/update errors in
+a daemon thread; acceptable for an optional OUI refresh, noted for completeness.
+
+**Clean:** no subprocess / iptables / address-to-command concerns here (pure
+data + JSON). `_load` defaults are fresh objects per call (no shared-mutable-
+default bug). MAC bit checks (`is_private_mac`/`is_stealth_mac`) are length-
+guarded.
+
+Verification (persistence batch):
+`pytest -q` → **56 passed** (+5) · `ruff check` / `ruff format` on changed
+files → clean · `mypy core/persistence.py` → clean.
+
+**Limits (persistence):** atomicity is verified by forcing `os.replace` to fail
+and asserting the original file survives — the true crash-mid-write case can't
+be unit-tested without killing the process, but `os.replace` is atomic by
+contract on POSIX. The thread-lock (PERS-2) is not race-tested.
+
+---
+
 ## Tool & Dependency Tribunal — 2026-11-19 (Phase 3)
 
 Matrix only — no dependency or config changes made in this phase. Evidence is
