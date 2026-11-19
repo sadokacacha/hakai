@@ -558,6 +558,71 @@ consolidation item.
 
 ---
 
+### `network/traffic.py` — RESOLVED (3 fixed) + 3 documented
+
+| ID | Sev | Location | Status |
+|----|-----|----------|--------|
+| TRAF-1 | Medium | `_read_proc` | **Fixed** |
+| TRAF-2 | Low-Med | `_proc_loop` 32-bit wrap | **Fixed** |
+| TRAF-4 | Low | `start()` sysctl except | **Fixed** |
+| TRAF-3 | Low | `_ipt_loop` delta heuristic | Documented |
+| TRAF-5 | Low | unbounded `_known_ips`/`_mac_to_ip` | Documented |
+| TRAF-6 | Low | repeated start/stop thread overlap | Documented |
+
+**TRAF-1 — Substring interface match reads the wrong counters.** `_read_proc`
+did `if iface in line`, so `iface="eth0"` matched `/proc/net/dev` lines for
+`veth0…`, `eth0.100` (VLAN), etc. — returning another interface's byte counters
+and corrupting the interface-level speed/total. *Fix:* extracted
+`_parse_iface_counters(text, iface)` that matches the name field before `:`
+**exactly**; `_read_proc` reads the file (narrow `OSError`) and delegates.
+*Regression:* `test_parse_iface_counters_exact_match` / `_vlan_is_distinct` /
+`_absent_iface` / `_ignores_garbage`.
+
+**TRAF-2 — 32-bit wrap assumption on 64-bit counters.** `_proc_loop` did
+`if rx_d < 0: rx_d += 2**32`. `/proc/net/dev` counters are 64-bit on modern
+kernels, so a genuine decrease (iface down/up reset) became a bogus ~4 GB delta
+→ an absurd one-sample speed spike. *Fix:* `_counter_delta(cur, prev)` returns
+`max(cur-prev, 0)` — a reset yields 0 (one sample skipped) instead of a 4 GB
+spike. *Trade-off:* on a genuinely 32-bit-wrapping NIC (rare, old drivers) this
+loses one ~4 GB delta per wrap, which is far better than a false 34 Gbps reading
+on the common 64-bit path. *Regression:* `test_counter_delta_normal_increase`,
+`test_counter_delta_reset_returns_zero_not_wrap`.
+
+**TRAF-4 — Silent sysctl failure in `start()`.** Narrowed the broad
+`except Exception: pass` around the `ip_forward` sysctl to
+`OSError`/`SubprocessError` with a `logging` warning.
+
+**TRAF-3 (documented) — `_ipt_loop` reset heuristic.** On a counter decrease it
+uses `cur` as the delta (assumes it restarted from 0), a different heuristic from
+`_proc_loop`. This does not produce a 2**32 spike and is arguably correct
+(captures traffic since the reset), so it is left as-is; unifying the two is a
+consistency nicety, not a bug.
+
+**TRAF-5 (documented) — Unbounded maps.** `_known_ips`/`_mac_to_ip` and the
+per-IP deques/totals grow with every device seen and are never evicted (no
+`unregister_device`); a slow memory creep on long-lived sessions with device
+churn.
+
+**TRAF-6 (documented) — Repeated start/stop overlap.** `stop()` just flips
+`_running`; a `_scapy_loop`'s `sniff(timeout=2)` can still be in flight when a
+later `start()` spawns a new sniffer thread (`controller._restart_services` does
+stop→start). Brief thread overlap, daemon, no leak at exit.
+
+**Clean:** no address-before-subprocess concern here (IPs are internal dict keys;
+the only subprocess, `iptables -L`/`sysctl`, takes no device IP). Windows paths
+return 0/early (honest, not fake success). Deque access is consistently under
+`self._lock`.
+
+Verification (traffic batch):
+`pytest -q` → **51 passed** (+6) · `ruff check` / `ruff format` on changed
+files → clean · `mypy network/traffic.py` → clean.
+
+**Limits (traffic):** parsing/delta fixes are proven with synthetic
+`/proc/net/dev` text and pure-function unit tests; the live sniffer/iptables
+polling loops are not exercised against real traffic.
+
+---
+
 ## Tool & Dependency Tribunal — 2026-11-19 (Phase 3)
 
 Matrix only — no dependency or config changes made in this phase. Evidence is

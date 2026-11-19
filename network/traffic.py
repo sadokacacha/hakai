@@ -9,10 +9,12 @@ Direction (iptables):
   FORWARD -s <ip>  → upload   (TX — device sending to internet)
   FORWARD -d <ip>  → download (RX — device receiving from internet)
 """
+
 from __future__ import annotations
 
 try:
     from scapy.all import IP, AsyncSniffer, Ether, IPv6, sniff
+
     SCAPY_OK = True
 except ImportError:
     AsyncSniffer = IP = Ether = sniff = None  # type: ignore[assignment,misc]
@@ -31,16 +33,16 @@ _log = logging.getLogger(__name__)
 
 
 class TrafficCounter:
-    WINDOW    = 5    # sliding speed window in seconds (wider = smoother on sparse data)
-    IPT_POLL  = 1.0  # iptables counter poll interval
+    WINDOW = 5  # sliding speed window in seconds (wider = smoother on sparse data)
+    IPT_POLL = 1.0  # iptables counter poll interval
     PROC_POLL = 1.0  # /proc/net/dev poll interval
 
     def __init__(self):
-        self._lock    = threading.Lock()
+        self._lock = threading.Lock()
         self._running = False
-        self._iface   = ""
-        self._my_ip   = ""
-        self._my_mac  = ""
+        self._iface = ""
+        self._my_ip = ""
+        self._my_mac = ""
 
         # Per-IP sliding speed queues: deque of (timestamp, bytes)
         self._rx: dict[str, collections.deque] = collections.defaultdict(collections.deque)
@@ -55,8 +57,8 @@ class TrafficCounter:
         self._pkt_tx_acc: dict[str, int] = collections.defaultdict(int)
 
         # Usage offsets — let us "reset" counters without touching kernel state
-        self._rx_off:     dict[str, int] = collections.defaultdict(int)
-        self._tx_off:     dict[str, int] = collections.defaultdict(int)
+        self._rx_off: dict[str, int] = collections.defaultdict(int)
+        self._tx_off: dict[str, int] = collections.defaultdict(int)
         self._pkt_rx_off: dict[str, int] = collections.defaultdict(int)
         self._pkt_tx_off: dict[str, int] = collections.defaultdict(int)
 
@@ -64,22 +66,22 @@ class TrafficCounter:
         self._ipt_prev: dict[str, list] = collections.defaultdict(lambda: [0, 0])
 
         # Registered IPs and MACs
-        self._known_ips: set[str]       = set()
+        self._known_ips: set[str] = set()
         self._mac_to_ip: dict[str, str] = {}
-        self._cut_ips:   set[str]       = set()
+        self._cut_ips: set[str] = set()
         self._last_scapy: dict[str, float] = {}  # ip -> last scapy packet timestamp
 
         # Per-IP data source tracking: True = iptables/MITM active, False = passive only
         self._mitm_active: dict[str, bool] = collections.defaultdict(bool)
 
         # Interface-level (from /proc/net/dev)
-        self._iface_rx_prev:  int   = 0
-        self._iface_tx_prev:  int   = 0
-        self._proc_ts:        float = 0.0
+        self._iface_rx_prev: int = 0
+        self._iface_tx_prev: int = 0
+        self._proc_ts: float = 0.0
         self._iface_rx_speed: float = 0.0
         self._iface_tx_speed: float = 0.0
-        self._iface_rx_total: int   = 0
-        self._iface_tx_total: int   = 0
+        self._iface_rx_total: int = 0
+        self._iface_tx_total: int = 0
 
     # ── Device registration ─────────────────────────────────────────────────
 
@@ -88,7 +90,6 @@ class TrafficCounter:
             self._known_ips.add(ip)
             if mac:
                 self._mac_to_ip[mac.lower()] = ip
-
 
     def mark_cut(self, ip: str):
         with self._lock:
@@ -105,16 +106,16 @@ class TrafficCounter:
     def start(self, iface: str, my_ip: str, my_mac: str = ""):
         if self._running:
             return
-        self._iface  = iface
-        self._my_ip  = my_ip
+        self._iface = iface
+        self._my_ip = my_ip
         self._my_mac = my_mac.lower()
 
         # Force IP Forwarding (Linux only)
         if not _IS_WINDOWS:
             try:
                 subprocess.run(["sysctl", "-w", "net.ipv4.ip_forward=1"], capture_output=True)
-            except Exception:
-                pass
+            except (OSError, subprocess.SubprocessError) as e:
+                _log.warning("traffic: could not enable ip_forward: %s", e)
 
         rx0, tx0 = self._read_proc(iface)
         self._iface_rx_prev = rx0
@@ -122,8 +123,8 @@ class TrafficCounter:
         self._proc_ts = time.time()
 
         self._running = True
-        threading.Thread(target=self._proc_loop,  daemon=True, name="tc_proc").start()
-        threading.Thread(target=self._ipt_loop,   daemon=True, name="tc_ipt").start()
+        threading.Thread(target=self._proc_loop, daemon=True, name="tc_proc").start()
+        threading.Thread(target=self._ipt_loop, daemon=True, name="tc_ipt").start()
         if SCAPY_OK:
             threading.Thread(target=self._scapy_loop, daemon=True, name="tc_scapy").start()
 
@@ -145,7 +146,10 @@ class TrafficCounter:
             try:
                 r = subprocess.run(
                     ["iptables", "-L", "FORWARD", "-v", "-n", "-x"],
-                    capture_output=True, text=True, timeout=5)
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
                 if r.returncode != 0:
                     continue
             except Exception:
@@ -162,14 +166,14 @@ class TrafficCounter:
                     bc = int(parts[1])
                 except ValueError:
                     continue
-                
+
                 # Strip potential /32 or other masks from iptables output
-                src = parts[7].split('/')[0]
-                dst = parts[8].split('/')[0]
+                src = parts[7].split("/")[0]
+                dst = parts[8].split("/")[0]
 
                 with self._lock:
                     known = self._known_ips
-                
+
                 if src in known and src != self._my_ip:
                     tx_now[src] = tx_now.get(src, 0) + bc
                 if dst in known and dst != self._my_ip:
@@ -182,15 +186,15 @@ class TrafficCounter:
                         continue
                     rx_cur = rx_now.get(ip, 0)
                     tx_cur = tx_now.get(ip, 0)
-                    prev   = self._ipt_prev[ip]
-                    
+                    prev = self._ipt_prev[ip]
+
                     rx_d = rx_cur - prev[0] if rx_cur >= prev[0] else rx_cur
                     tx_d = tx_cur - prev[1] if tx_cur >= prev[1] else tx_cur
                     self._ipt_prev[ip] = [rx_cur, tx_cur]
 
                     if rx_d > 0:
                         self._rx_tot[ip] += rx_d
-                        self._mitm_active[ip] = True   # iptables saw real forwarded bytes
+                        self._mitm_active[ip] = True  # iptables saw real forwarded bytes
                         if now - self._last_scapy.get(ip, 0) > 1.5:
                             self._rx[ip].append((now, rx_d))
                     if tx_d > 0:
@@ -202,20 +206,44 @@ class TrafficCounter:
     # ── Layer 2: /proc/net/dev interface speed ──────────────────────────────
 
     @staticmethod
+    def _parse_iface_counters(text: str, iface: str) -> tuple[int, int]:
+        """Extract (rx_bytes, tx_bytes) for exactly ``iface`` from /proc/net/dev.
+
+        Matches the interface name exactly (the field before ':'), not as a
+        substring — 'eth0 in line' wrongly matches 'veth0…' and 'eth0.100' (VLAN)
+        lines and would read the wrong interface's counters.
+        """
+        for line in text.splitlines():
+            name, sep, rest = line.partition(":")
+            if not sep or name.strip() != iface:
+                continue
+            parts = rest.split()
+            if len(parts) >= 9:
+                try:
+                    return int(parts[0]), int(parts[8])
+                except ValueError:
+                    return 0, 0
+        return 0, 0
+
+    @staticmethod
+    def _counter_delta(cur: int, prev: int) -> int:
+        """Non-negative delta for a monotonic byte counter. A decrease means the
+        counter was reset (iface down/up): report 0 rather than assuming a 32-bit
+        wrap (+2**32) — /proc/net/dev counters are 64-bit on modern kernels, so a
+        reset would otherwise register a bogus ~4 GB spike."""
+        d = cur - prev
+        return d if d >= 0 else 0
+
+    @staticmethod
     def _read_proc(iface: str) -> tuple[int, int]:
         """Read interface byte counters from /proc/net/dev (Linux only)."""
         if _IS_WINDOWS:
             return 0, 0
         try:
             with open("/proc/net/dev") as f:
-                for line in f:
-                    if iface in line:
-                        parts = line.split(":")[-1].split()
-                        if len(parts) >= 9:
-                            return int(parts[0]), int(parts[8])
-        except Exception:
-            pass
-        return 0, 0
+                return TrafficCounter._parse_iface_counters(f.read(), iface)
+        except OSError:
+            return 0, 0
 
     def _proc_loop(self):
         while self._running:
@@ -225,10 +253,8 @@ class TrafficCounter:
             elapsed = now - self._proc_ts
             if elapsed <= 0:
                 continue
-            rx_d = rx - self._iface_rx_prev
-            tx_d = tx - self._iface_tx_prev
-            if rx_d < 0: rx_d += 2**32
-            if tx_d < 0: tx_d += 2**32
+            rx_d = self._counter_delta(rx, self._iface_rx_prev)
+            tx_d = self._counter_delta(tx, self._iface_tx_prev)
             with self._lock:
                 self._iface_rx_speed = (rx_d / elapsed) * 8 / 1_000_000
                 self._iface_tx_speed = (tx_d / elapsed) * 8 / 1_000_000
@@ -242,13 +268,13 @@ class TrafficCounter:
     # ── Layer 3: Scapy per-packet sniffer ───────────────────────────────────
 
     def _scapy_loop(self):
-        if not SCAPY_OK: return
+        if not SCAPY_OK:
+            return
         _log.info("Traffic sniffer started on %s", self._iface)
         while self._running:
             try:
                 # Use a small timeout to allow checking self._running
-                sniff(iface=self._iface, filter="ip or ip6", prn=self._pkt, 
-                      store=0, timeout=2)
+                sniff(iface=self._iface, filter="ip or ip6", prn=self._pkt, store=0, timeout=2)
             except Exception as e:
                 if "Network is down" in str(e):
                     time.sleep(5)
@@ -260,9 +286,10 @@ class TrafficCounter:
         Supports IPv4 and IPv6.
         """
         try:
-            now  = time.time()
+            now = time.time()
             size = len(pkt)
-            if size < 60: return
+            if size < 60:
+                return
 
             src_ip, dst_ip = None, None
             if pkt.haslayer(IP):
@@ -317,9 +344,9 @@ class TrafficCounter:
         Uses WINDOW seconds as the denominator (not packet-span), so bursty
         traffic (e.g. one big chunk then silence) averages correctly.
         """
-        now      = time.time()
-        lookback = float(self.WINDOW)   # 3 s default
-        cut      = now - lookback
+        now = time.time()
+        lookback = float(self.WINDOW)  # 3 s default
+        cut = now - lookback
 
         # NOTE: Lock is held by the caller
         while dq and dq[0][0] < cut:
@@ -341,19 +368,23 @@ class TrafficCounter:
         with self._lock:
             rx_tot = max(0, self._rx_tot[ip] - self._rx_off[ip])
             tx_tot = max(0, self._tx_tot[ip] - self._tx_off[ip])
-            
+
             if ip in self._cut_ips:
                 return (0.0, 0.0, rx_tot, tx_tot)
 
             rx_spd = self._spd(self._rx[ip])
             tx_spd = self._spd(self._tx[ip])
-            
+
         return (rx_spd, tx_spd, rx_tot, tx_tot)
 
     def get_iface_speed(self) -> tuple[float, float, int, int]:
         with self._lock:
-            return (self._iface_rx_speed, self._iface_tx_speed,
-                    self._iface_rx_total, self._iface_tx_total)
+            return (
+                self._iface_rx_speed,
+                self._iface_tx_speed,
+                self._iface_rx_total,
+                self._iface_tx_total,
+            )
 
     def get_mode(self, ip: str) -> str:
         """
@@ -392,8 +423,8 @@ class TrafficCounter:
     def reset_usage(self, ip: str):
         """Snapshot current counters as the new zero-point for this IP."""
         with self._lock:
-            self._rx_off[ip]     = self._rx_tot[ip]
-            self._tx_off[ip]     = self._tx_tot[ip]
+            self._rx_off[ip] = self._rx_tot[ip]
+            self._tx_off[ip] = self._tx_tot[ip]
             self._pkt_rx_off[ip] = self._pkt_rx_acc[ip]
             self._pkt_tx_off[ip] = self._pkt_tx_acc[ip]
             self._rx[ip] = collections.deque()
@@ -403,8 +434,8 @@ class TrafficCounter:
         """Reset session counters for all known IPs."""
         with self._lock:
             for ip in self._known_ips:
-                self._rx_off[ip]     = self._rx_tot[ip]
-                self._tx_off[ip]     = self._tx_tot[ip]
+                self._rx_off[ip] = self._rx_tot[ip]
+                self._tx_off[ip] = self._tx_tot[ip]
                 self._pkt_rx_off[ip] = self._pkt_rx_acc.get(ip, 0)
                 self._pkt_tx_off[ip] = self._pkt_tx_acc.get(ip, 0)
             self._rx.clear()
