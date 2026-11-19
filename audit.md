@@ -423,6 +423,73 @@ teardown sequence against a live kernel. CTL-2–5 remain open as documented.
 
 ---
 
+### `system/iptables_manager.py` — RESOLVED (3 fixed, test hygiene) + 2 documented
+
+| ID | Sev | Location | Status |
+|----|-----|----------|--------|
+| IPT-1 | Medium | `add_accounting` / `add_drop` | **Fixed** |
+| IPT-2 | Medium | `add_accounting` / `add_drop` | **Fixed** |
+| IPT-5 | Medium | `_ipt` (missing binary) | **Fixed** |
+| IPT-4 | — | existing tests mutate real host | **Fixed** (test hygiene) |
+| IPT-3 | Low | `remove_accounting` retry asymmetry | Documented |
+| IPT-win | Medium | `_ipt` Windows fake success | Documented (systemic) |
+
+**Usage note:** grep confirms only `add_accounting` (controller scan) and
+`cleanup` (controller stop) are called by the app. `add_drop`/`remove_drop`/
+`is_dropped` are **dead** — `network/arp.py` applies its own FORWARD DROP. The
+DROP half was hardened for consistency but is a Phase-4/7 removal candidate (a
+header note now says so). Rule ordering is **clean**: ACCEPT is `-A` (appended),
+DROP is `-I FORWARD 1` (prepended), so DROP always precedes ACCEPT — correct for
+first-match-wins.
+
+**IPT-1 — Insert exit code ignored → stale state + silent failure.**
+`add_accounting`/`add_drop` checked `-C` to decide whether to insert, but never
+checked the `-A`/`-I` result; they recorded the IP in `_accounting`/`_dropped`
+regardless, so a failed rule insert was invisible (AGENTS.md: "do not assume a
+command succeeded"). *Fix:* both now check the insert result, log via `logging`
+on failure, and return a success `bool`. The IP is still tracked for cleanup
+even on partial failure (so a rule that *did* apply is still removed; `-D` is
+harmless when absent). *Regression:* `test_add_accounting_reports_insert_failure`,
+`test_add_accounting_success_when_rule_present`, `test_add_drop_reports_insert_failure`.
+
+**IPT-2 — No IP validation before root commands.** IPs flowed straight into
+`iptables` with no `ipaddress` check. *Fix:* `_valid_ip()` guard; `add_accounting`
+/`add_drop` return False and issue no command on invalid input. *Regression:*
+`test_add_accounting_rejects_invalid_ip`, `test_add_drop_rejects_invalid_ip`.
+
+**IPT-5 — `_ipt` raised on a missing binary.** `_ipt` ran `subprocess.run(["iptables",…])`
+with no guard, so a host without the iptables binary would raise
+`FileNotFoundError` up through `controller.scan`. *Fix:* catch
+`OSError`/`SubprocessError`, log, and return a `returncode=1` CompletedProcess so
+callers degrade. *Regression:* `test_ipt_handles_missing_binary`.
+
+**IPT-4 — Test hygiene (fixed).** The existing `test_iptables_manager.py` issued
+**real** `iptables` commands on Linux (the "no-op off Linux" comment was wrong on
+a Linux host) — deterministic only because non-root made them fail. Added an
+autouse fixture stubbing `_ipt`, so they no longer touch host state and pass
+regardless of privilege.
+
+**IPT-3 (documented) — Asymmetric duplicate removal.** `remove_drop` retries 3×
+to clear duplicate DROP rules; `remove_accounting` is single-pass. Duplicates
+can only arise under a `-C`/`-A` race, and `add_accounting` is called serialized
+under `controller._lock`, so the risk is low. Noted, not fixed.
+
+**IPT-win (documented, systemic) — Windows fake success.** `_ipt` returns
+`returncode=0` on Windows, so `add_*` "succeed" while applying nothing (silent
+no-op that "pretends to work"). This is the cross-platform inconsistency also
+seen in ARP-5 / `tc_manager`; making Windows *explicitly* unsupported is a
+systemic decision for Phase 4/6, not a point fix here.
+
+Verification (iptables batch):
+`pytest -q` → **39 passed** (+6 new, 3 existing isolated) · `ruff check` /
+`ruff format` on changed files → clean · `mypy system/iptables_manager.py` → clean.
+
+**Limits (iptables):** proven with a stubbed `_ipt` — verifies the success/
+failure signal, validation, and missing-binary degradation. Does not prove real
+FORWARD rule insertion/ordering on a live kernel.
+
+---
+
 ## Tool & Dependency Tribunal — 2026-11-19 (Phase 3)
 
 Matrix only — no dependency or config changes made in this phase. Evidence is
