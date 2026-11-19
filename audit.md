@@ -684,6 +684,58 @@ contract on POSIX. The thread-lock (PERS-2) is not race-tested.
 
 ---
 
+### `network/dns_spoof.py` — RESOLVED (3 fixed) + 2 documented
+
+*Offensive module — fixes are reliability/cleanup only, not spoof effectiveness
+(per the session scope).*
+
+| ID | Sev | Location | Status |
+|----|-----|----------|--------|
+| DNS-1 | Medium | `start_spoof` / `stop_spoof` | **Fixed** |
+| DNS-2 | Medium | `start_spoof` (-I) / `stop_spoof` (-D) | **Fixed** |
+| DNS-5 | Low | `_running` set outside lock | **Fixed** |
+| DNS-4 | Low | sniff thread lingers after per-target stop | Documented |
+| DNS-6 | Low | Windows silent no-op | Documented (systemic) |
+
+**DNS-1 — No IP validation before root iptables.** `target_ip` flowed straight
+into `iptables -t nat -I PREROUTING -s <ip>`. *Fix:* `_valid_ip()` guard;
+`start_spoof` returns False and issues no command on invalid input. *Regression:*
+`test_start_spoof_rejects_invalid_ip`.
+
+**DNS-2 — Duplicate NAT REDIRECT rule leak.** `start_spoof` ran `-I` with no
+`-C` check, so a repeated start stacked identical PREROUTING rules; `stop_spoof`
+did a single `-D`, removing only one → the rest leaked past cleanup. *Fix:*
+`-C` guard before `-I` (idempotent add); `stop_spoof` loops `-D` (up to 3×) to
+clear duplicates; both check/ log the result and narrow the except. *Regression:*
+`test_start_spoof_checks_before_insert`, `test_stop_spoof_clears_duplicate_rules`.
+
+**DNS-5 — `_running` race.** It was set outside the lock, so two concurrent
+`start_spoof` calls could each start a sniff thread. *Fix:* decide `start_thread`
+and set `_running` under the lock; start the thread after releasing it.
+
+**DNS-4 (documented) — Lingering sniffer.** `stop_spoof` for the last target
+doesn't stop the single shared sniff thread (only `stop_all` does); it idles
+harmlessly (the callback early-returns on an empty map) until shutdown.
+
+**DNS-6 (documented, systemic) — Windows.** No `_IS_WINDOWS` guard; on Windows
+the iptables calls now fail into the narrowed `except` (logged, no crash) — a
+silent no-op, same cross-platform class as IPT-win / ARP-5.
+
+**Reachability note:** `controller.toggle_dns_spoof` can *start* this, but no UI
+control is wired to it (p1), so `start_spoof` is currently unreachable;
+`stop_spoof`/`stop_all` *are* reached (restore paths). Fixed for correctness and
+in case it is wired later. `_valid_ip` is now a 4th copy — Phase-4 dedupe item.
+
+Verification (dns_spoof batch):
+`pytest -q` → **59 passed** (+3) · `ruff check` / `ruff format` on changed
+files → clean · `mypy network/dns_spoof.py` → clean.
+
+**Limits (dns_spoof):** proven with mocked iptables + a stubbed sniff loop —
+verifies validation, the -C/-I idempotency, and the -D duplicate retry, not real
+NAT redirection or DNS interception on a live host.
+
+---
+
 ## Tool & Dependency Tribunal — 2026-11-19 (Phase 3)
 
 Matrix only — no dependency or config changes made in this phase. Evidence is
