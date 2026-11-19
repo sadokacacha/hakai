@@ -2,9 +2,11 @@
 core/controller.py — Central orchestrator wiring all modules together.
 Thread-safe, event-driven, clean start/stop.
 """
+
 from __future__ import annotations
 
 import asyncio
+import logging
 import socket
 import threading
 import time
@@ -40,38 +42,41 @@ from system.netinfo import NetInfo, engage_mitm
 from system.stealth import disengage_stealth, engage_mirage_cloak
 from system.tc_manager import TCManager
 
+_log = logging.getLogger(__name__)
+
 
 class Controller:
     def __init__(self, net: NetInfo):
-        self.net      = net
+        self.net = net
         self.devices: dict[str, Device] = {}
         self._running = False
-        self._lock    = threading.Lock()
+        self._stopped = False
+        self._lock = threading.Lock()
         self._pending_names_by_mac: dict[str, str] = {}
         self._pending_names_by_ip: dict[str, str] = {}
         self._pending_os_by_mac: dict[str, str] = {}
 
         # Sub-systems
-        self.scanner  = Scanner(net.subnet or "192.168.1.0/24")
-        self.traffic  = TrafficCounter()
-        self.arp      = ArpManager()
-        self.dns      = DnsSpoofManager()
-        self.ipv6     = IPv6Hijacker(net.iface, net.my_mac)
-        self.xdp      = XDPEngine(net.iface)
+        self.scanner = Scanner(net.subnet or "192.168.1.0/24")
+        self.traffic = TrafficCounter()
+        self.arp = ArpManager()
+        self.dns = DnsSpoofManager()
+        self.ipv6 = IPv6Hijacker(net.iface, net.my_mac)
+        self.xdp = XDPEngine(net.iface)
         self.xdp.load()
-        self.ipt      = IPTManager()
-        self.tc       = TCManager()
+        self.ipt = IPTManager()
+        self.tc = TCManager()
         self.protector = Protector(self)
         self.firewall = GhostFirewall()
-        self.recon    = ReconEngine()
+        self.recon = ReconEngine()
 
         # Optional deauth (wired later if WiFi)
-        self.deauth   = None
-        
+        self.deauth = None
+
         # Stealth state
         self.stealth_active = False
         self._orig_mac = net.my_mac
-        self._orig_hn  = socket.gethostname()
+        self._orig_hn = socket.gethostname()
 
     def start(self):
         """Bootstrap the engine."""
@@ -86,24 +91,29 @@ class Controller:
         if self.net.iface:
             self.tc.init(self.net.iface)
             if self.net.gateway:
-                threading.Thread(target=self.arp._resolve_macs, 
-                                 args=("", self.net.gateway, self.net.iface),
-                                 daemon=True).start()
-        
+                threading.Thread(
+                    target=self.arp._resolve_macs,
+                    args=("", self.net.gateway, self.net.iface),
+                    daemon=True,
+                ).start()
+
         # Start Intel Sniffer (DHCP + mDNS)
         self._start_intel_sniffer()
 
     def toggle_ipv6_hijack(self, state: bool, log=None):
         if state:
             self.ipv6.start()
-            if log: log("🔱 IPv6 HIJACK ACTIVE (RA + DHCPv6 Spoof)", "atk")
+            if log:
+                log("🔱 IPv6 HIJACK ACTIVE (RA + DHCPv6 Spoof)", "atk")
         else:
             self.ipv6.stop()
-            if log: log("🔱 IPv6 HIJACK DISABLED", "info")
+            if log:
+                log("🔱 IPv6 HIJACK DISABLED", "info")
         return True
 
     def _start_intel_sniffer(self):
         """Background thread to capture identities via mDNS and DHCP."""
+
         def _cb(pkt):
             # Unmask OS via DHCP (option 55) + hostname via option 12
             sniff_dhcp_os(pkt, self._on_intel_os_found, self._on_intel_hostname_found)
@@ -121,13 +131,20 @@ class Controller:
                 self._on_intel_tcp_found(pkt[IP].src, ttl, win)
 
         from scapy.all import IP, TCP, sniff
+
         def _loop():
             while self._running:
                 try:
-                    sniff(filter="udp and (port 67 or port 68 or port 5353)",
-                          prn=_cb, iface=self.net.iface, store=0, timeout=10)
+                    sniff(
+                        filter="udp and (port 67 or port 68 or port 5353)",
+                        prn=_cb,
+                        iface=self.net.iface,
+                        store=0,
+                        timeout=10,
+                    )
                 except Exception:
-                    if self._running: time.sleep(2)
+                    if self._running:
+                        time.sleep(2)
 
         threading.Thread(target=_loop, daemon=True, name="intel_sniffer").start()
 
@@ -174,9 +191,8 @@ class Controller:
     def _apply_pending_identity(self, dev: Device):
         """Apply DHCP/mDNS data that arrived before the scan knew this device."""
         mac_l = (dev.mac or "").lower()
-        pending_name = (
-            self._pending_names_by_ip.get(dev.ip)
-            or (self._pending_names_by_mac.get(mac_l) if mac_l else "")
+        pending_name = self._pending_names_by_ip.get(dev.ip) or (
+            self._pending_names_by_mac.get(mac_l) if mac_l else ""
         )
         if pending_name and (not dev.hostname or _is_junk_hostname(dev.hostname)):
             dev.hostname = pending_name
@@ -212,9 +228,11 @@ class Controller:
                 dev.tcp_window = window
                 # Refine OS guess if generic
                 if not dev.os_guess or dev.os_guess == "Generic Device":
-                    if ttl >= 120:         dev.os_guess = "Windows"
-                    elif ttl <= 64:        dev.os_guess = "Linux/Mobile"
-                
+                    if ttl >= 120:
+                        dev.os_guess = "Windows"
+                    elif ttl <= 64:
+                        dev.os_guess = "Linux/Mobile"
+
                 # Re-classify with new Stage 6 data
                 dev.identity = classify_device(dev)
 
@@ -234,15 +252,18 @@ class Controller:
         1. Wait 5s for passive intel (mDNS/DHCP/DNS) to fill in.
         2. If confidence is still low, fire active probes (Stage 3/4/5).
         """
+
         async def _run():
             # Stealth Grace Period
             await asyncio.sleep(5)
-            
+
             with self._lock:
-                if ip not in self.devices: return
+                if ip not in self.devices:
+                    return
                 dev = self.devices[ip]
                 # If passive already unmasked it, stay silent
-                if dev.confidence >= 60: return
+                if dev.confidence >= 60:
+                    return
 
             data = await self.recon.run_recon(ip, self.net.gateway)
             with self._lock:
@@ -254,28 +275,54 @@ class Controller:
         # Fire and forget in a separate thread/loop
         threading.Thread(target=lambda: asyncio.run(_run()), daemon=True).start()
 
-
     def stop(self):
-        """Graceful shutdown — restore all devices, cleanup kernel state."""
+        """Graceful shutdown — restore all devices, clean up kernel state.
+
+        Idempotent and crash-tolerant: every cleanup step is isolated so a
+        failure in one can't skip the rest, and the kernel/NIC restore is
+        always attempted last regardless of earlier errors.
+        """
+        with self._lock:
+            if self._stopped:
+                return
+            self._stopped = True
         self._running = False
-        self.arp.restore_all()
-        self.arp.stop_watchdog()
-        self.dns.stop_all()
-        self.xdp.unload()
-        self.traffic.stop()
-        self.protector.stop()
-        self.tc.teardown()
-        self.ipt.cleanup()
-        self.ipv6.stop()
-        self.scanner.stop_passive_discovery()
-        
-        # Revert aggressive kernel changes (promisc, redirects, etc)
-        from system.netinfo import restore_network
-        restore_network(self.net)
-        
+
+        # Best-effort, isolated: a raise in one step (e.g. xdp.unload via bcc)
+        # must not prevent the others — above all restore_network — from running.
+        for name, step in (
+            ("arp.restore_all", self.arp.restore_all),
+            ("arp.stop_watchdog", self.arp.stop_watchdog),
+            ("dns.stop_all", self.dns.stop_all),
+            ("xdp.unload", self.xdp.unload),
+            ("traffic.stop", self.traffic.stop),
+            ("protector.stop", self.protector.stop),
+            ("tc.teardown", self.tc.teardown),
+            ("ipt.cleanup", self.ipt.cleanup),
+            ("ipv6.stop", self.ipv6.stop),
+            ("scanner.stop_passive_discovery", self.scanner.stop_passive_discovery),
+        ):
+            try:
+                step()
+            except Exception:
+                _log.exception("cleanup step %s failed", name)
+
+        # Revert kernel/NIC changes (promisc, redirects, rp_filter, proxy_arp…).
+        # Always runs; a partial restore is surfaced, not swallowed.
+        from system import netinfo
+
+        try:
+            if not netinfo.restore_network(self.net):
+                _log.warning("restore_network reported a partial restore")
+        except Exception:
+            _log.exception("restore_network raised")
+
         # Disengage stealth if active
         if self.stealth_active:
-            disengage_stealth(self.net.iface, self._orig_mac, self._orig_hn)
+            try:
+                disengage_stealth(self.net.iface, self._orig_mac, self._orig_hn)
+            except Exception:
+                _log.exception("disengage_stealth raised")
 
     def snapshot_devices(self) -> list[Device]:
         """Thread-safe copy of the current device list for safe iteration.
@@ -294,11 +341,12 @@ class Controller:
         found = self.scanner.scan(
             iface=self.net.iface,
             timeout_s=db.get("scan_timeout", 45),
-            spoof_mac=self.net.my_mac if self.stealth_active else "")
+            spoof_mac=self.net.my_mac if self.stealth_active else "",
+        )
 
         if self.net.my_ip in found:
             found[self.net.my_ip].hostname = "YOU"
-            found[self.net.my_ip].status   = "self"
+            found[self.net.my_ip].status = "self"
         if self.net.gateway in found:
             gw = found[self.net.gateway]
             if not gw.hostname:
@@ -312,10 +360,12 @@ class Controller:
                     existing = self.devices[ip]
                     # Merge scanner data: prefer non-empty values from new scan
                     clean_hostname = sanitize_mdns_name(dev.hostname) if dev.hostname else ""
-                    existing.hostname  = clean_hostname or existing.hostname
-                    existing.os_guess  = dev.os_guess  or existing.os_guess
-                    existing.vendor    = sanitize_vendor(get_vendor(dev.mac) or dev.vendor or existing.vendor)
-                    existing.mac       = dev.mac or existing.mac
+                    existing.hostname = clean_hostname or existing.hostname
+                    existing.os_guess = dev.os_guess or existing.os_guess
+                    existing.vendor = sanitize_vendor(
+                        get_vendor(dev.mac) or dev.vendor or existing.vendor
+                    )
+                    existing.mac = dev.mac or existing.mac
                     existing.last_seen = datetime.now().strftime("%H:%M:%S")
                     self._apply_pending_identity(existing)
                     self.traffic.register_device(ip, dev.mac)
@@ -351,7 +401,6 @@ class Controller:
                     self.fingerprint(ip, log=None)
                 self.run_deep_recon(ip)
 
-
         if log:
             log(f"Scan complete — {len(self.devices)} devices | {len(new_ips)} new", "ok")
 
@@ -372,14 +421,16 @@ class Controller:
     def cut_device(self, ip: str, log=None) -> bool:
         dev = self.devices.get(ip)
         if not dev or not self.net.gateway:
-            if log: log(f"Cannot cut {ip} — no gateway", "err")
-            return False
-            
-        if dev.status == "self" or ip == self.net.gateway:
-            if log: log(f"✕ Safeguard: Cannot cut {ip} (Self/Gateway)", "warn")
+            if log:
+                log(f"Cannot cut {ip} — no gateway", "err")
             return False
 
-        dev.cut    = True
+        if dev.status == "self" or ip == self.net.gateway:
+            if log:
+                log(f"✕ Safeguard: Cannot cut {ip} (Self/Gateway)", "warn")
+            return False
+
+        dev.cut = True
         dev.status = "cut"
         # Zero speed display immediately — don't wait for the 3-s window to drain
         self.traffic.mark_cut(ip)
@@ -387,7 +438,8 @@ class Controller:
         def _do():
             ok = self.arp.cut(ip, self.net.gateway, self.net.iface, self.net.my_ip)
             if not ok:
-                if log: log(f"✕ {ip} — ARP resolution failed (target not reachable)", "err")
+                if log:
+                    log(f"✕ {ip} — ARP resolution failed (target not reachable)", "err")
                 return
             self.xdp.add_drop(ip)
             # WiFi deauth (if applicable)
@@ -396,33 +448,42 @@ class Controller:
             t_mac = t_info.get("target_mac", "")
             if self.deauth and t_mac:
                 self.deauth.start_pmf_bypass(t_mac)
-            if log: log(f"🔒 {ip} LOCKED — XDP + ARP flood active", "atk")
+            if log:
+                log(f"🔒 {ip} LOCKED — XDP + ARP flood active", "atk")
 
         threading.Thread(target=_do, daemon=True, name=f"cut_{ip}").start()
         return True
 
     def monitor_device(self, ip: str, log=None):
         dev = self.devices.get(ip)
-        if not dev or not self.net.gateway: return False
-        if dev.status == "self" or ip == self.net.gateway: return False
-        threading.Thread(target=self.arp.spoof, 
-                         args=(ip, self.net.gateway, self.net.iface, self.net.my_ip),
-                         daemon=True).start()
-        if log: log(f"👁 Monitoring {ip}...", "info")
+        if not dev or not self.net.gateway:
+            return False
+        if dev.status == "self" or ip == self.net.gateway:
+            return False
+        threading.Thread(
+            target=self.arp.spoof,
+            args=(ip, self.net.gateway, self.net.iface, self.net.my_ip),
+            daemon=True,
+        ).start()
+        if log:
+            log(f"👁 Monitoring {ip}...", "info")
         return True
 
     def restore_device(self, ip: str, log=None):
         dev = self.devices.get(ip)
-        if not dev: return
+        if not dev:
+            return
         self.arp.restore(ip)
         self.dns.stop_spoof(ip)
         self.xdp.remove_drop(ip)
-        if dev.limited: self.tc.unlimit(ip)
-        dev.cut     = False
+        if dev.limited:
+            self.tc.unlimit(ip)
+        dev.cut = False
         dev.limited = False
-        dev.status  = "online"
+        dev.status = "online"
         self.traffic.unmark_cut(ip)
-        if log: log(f"↺ {ip} restored", "ok")
+        if log:
+            log(f"↺ {ip} restored", "ok")
 
     def cut_all(self, log=None):
         for ip, dev in list(self.devices.items()):
@@ -438,24 +499,29 @@ class Controller:
 
     def limit_device(self, ip: str, kb: int, log=None) -> bool:
         dev = self.devices.get(ip)
-        if not dev: return False
-        
-        if dev.status == "self" or ip == self.net.gateway:
-            if log: log(f"✕ Safeguard: Cannot limit {ip} (Self/Gateway)", "warn")
+        if not dev:
             return False
-            
+
+        if dev.status == "self" or ip == self.net.gateway:
+            if log:
+                log(f"✕ Safeguard: Cannot limit {ip} (Self/Gateway)", "warn")
+            return False
+
         ok = self.tc.limit(ip, kb)
         dev.limit_kb = kb
-        dev.limited  = True
-        if log: log(f"⚡ {ip} → {kb} KB/s", "warn" if ok else "err")
+        dev.limited = True
+        if log:
+            log(f"⚡ {ip} → {kb} KB/s", "warn" if ok else "err")
         return ok
 
     def unlimit_device(self, ip: str, log=None):
         dev = self.devices.get(ip)
-        if not dev: return
+        if not dev:
+            return
         self.tc.unlimit(ip)
         dev.limited = False
-        if log: log(f"↺ {ip} limit removed", "ok")
+        if log:
+            log(f"↺ {ip} limit removed", "ok")
 
     # ── Fingerprinting ────────────────────────────────────────────────────────
 
@@ -473,16 +539,19 @@ class Controller:
                     log(f"[FP] {ip} -> {dev.identity}  OS:{dev.os_guess or '?'}", "ok")
             if done_cb:
                 done_cb(ip, dev)
-        fingerprint_device(ip, cb)
 
+        fingerprint_device(ip, cb)
 
     # ── DNS Spoofing ──────────────────────────────────────────────────────────
 
     def toggle_dns_spoof(self, ip: str, state: bool, log=None):
         dev = self.devices.get(ip)
-        if not dev: return False
-        if state: self.dns.start_spoof(ip)
-        else: self.dns.stop_spoof(ip)
+        if not dev:
+            return False
+        if state:
+            self.dns.start_spoof(ip)
+        else:
+            self.dns.stop_spoof(ip)
         return True
 
     # ── State persistence ─────────────────────────────────────────────────────
@@ -490,23 +559,27 @@ class Controller:
     def save_state(self, iface="", gateway="", log=None):
         db.save_state(self.devices)
         db.save_config(iface=iface or self.net.iface, gateway=gateway or self.net.gateway)
-        if log: log("💾 State saved.", "ok")
+        if log:
+            log("💾 State saved.", "ok")
 
     # ── Stealth Mode ──────────────────────────────────────────────────────────
 
     def toggle_stealth(self, state: bool, profile: str = "RANDOM", log=None):
-        if state == self.stealth_active: return True
+        if state == self.stealth_active:
+            return True
         if state:
             msg, new_mac = engage_mirage_cloak(self.net.iface, profile)
             if new_mac:
                 self.net.my_mac = new_mac
                 self.stealth_active = True
-                if log: log(msg, "atk")
+                if log:
+                    log(msg, "atk")
         else:
             msg = disengage_stealth(self.net.iface, self._orig_mac, self._orig_hn)
             self.net.my_mac = self._orig_mac
             self.stealth_active = False
-            if log: log(msg, "info")
+            if log:
+                log(msg, "info")
         return True
 
     def _restart_services(self, log=None):
@@ -516,29 +589,34 @@ class Controller:
             time.sleep(1)
             self.traffic.start(self.net.iface, self.net.my_ip, self.net.my_mac)
             self.protector.start()
-        except Exception: pass
+        except Exception:
+            pass
 
-    def on_protection_alert(self, msg: str): pass
+    def on_protection_alert(self, msg: str):
+        pass
 
     # ── Sovereign Apex Modules ────────────────────────────────────────────────
 
     def toggle_ghost_firewall(self, state: bool, log=None) -> str:
         status = self.firewall.toggle_stealth(state)
-        if log: log(f"🛡️ Ghost Firewall: {status}", "warn" if state else "info")
+        if log:
+            log(f"🛡️ Ghost Firewall: {status}", "warn" if state else "info")
         return status
 
     def toggle_stack_masquerade(self, state: bool, log=None) -> str:
         status = apply_stack_masquerade(state)
-        if log: log(f"🎭 Stack Masquerade: {status}", "warn" if state else "info")
+        if log:
+            log(f"🎭 Stack Masquerade: {status}", "warn" if state else "info")
         return status
 
     def toggle_chameleon(self, state: bool, log=None) -> str:
         status = toggle_chameleon(self.net.iface, state)
-        if log: log(f"🧬 Chameleon Engine: {status}", "warn" if state else "info")
+        if log:
+            log(f"🧬 Chameleon Engine: {status}", "warn" if state else "info")
         return status
 
     # ── Usage / Speeds ────────────────────────────────────────────────────────
-            
+
     def toggle_nuclear_stealth(self, state: bool, log=None) -> str:
         """
         Orchestrates Total Invisibility: Mirage + Masquerade + Shield.
@@ -548,28 +626,30 @@ class Controller:
             msg, new_mac = engage_mirage_cloak(self.net.iface)
             self.net.my_mac = new_mac
             self.stealth_active = True
-            
+
             # 2. Stack Masquerade (Windows TTL)
             apply_stack_masquerade(True)
-            
+
             # 3. Shield Lock (ARP)
             self.protector.enable_arp_guard(log=log)
-            
-            if log: log("☢️ NUCLEAR GHOST ENGAGED: TOTAL INVISIBILITY", "atk")
+
+            if log:
+                log("☢️ NUCLEAR GHOST ENGAGED: TOTAL INVISIBILITY", "atk")
             return msg
         else:
             # Revert to Normal
             msg = disengage_stealth(self.net.iface, self._orig_mac, self._orig_hn)
             self.net.my_mac = self._orig_mac
             self.stealth_active = False
-            
+
             # Revert Stack
             apply_stack_masquerade(False)
-            
+
             # Revert Shields
             self.protector.disable_arp_guard(log=log)
-            
-            if log: log("☢️ SHIELDS DISENGAGED: IDENTITY RESTORED", "info")
+
+            if log:
+                log("☢️ SHIELDS DISENGAGED: IDENTITY RESTORED", "info")
             return msg
 
     def update_device_speeds(self):

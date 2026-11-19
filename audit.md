@@ -360,6 +360,69 @@ changed files → clean · `mypy network/arp.py` → clean.
 
 ---
 
+### `core/controller.py` — RESOLVED (1 fixed) + 4 documented
+
+| ID | Sev | Location | Status |
+|----|-----|----------|--------|
+| CTL-1 | High | `stop()` | **Fixed** |
+| CTL-2 | Medium | `start()` partial-failure cleanup | Documented |
+| CTL-3 | Medium | `log=` / `on_protection_alert` cross-thread UI | Documented (cross-file → dashboard) |
+| CTL-4 | Low | `cut_device` optimistic state vs `arp.cut` result | Documented |
+| CTL-5 | Low | unbounded recon/fingerprint/cut threads | Documented |
+
+**CTL-1 — Shutdown aborts remaining cleanup on any error → partial restoration.**
+Old `stop()` was a flat sequence (`arp.restore_all` … `xdp.unload` … `tc.teardown`
+… `restore_network` … `disengage_stealth`) with no per-step isolation and no
+reentrancy guard. If any step raised — `xdp.unload()` can, via bcc `remove_xdp`
+— every later step was skipped, so `restore_network` (promisc/rp_filter/
+proxy_arp/redirects) and `disengage_stealth` never ran and the host was left
+mutated. It also ignored `restore_network`'s new success bool, and a double
+`stop()` re-ran the whole teardown. *Evidence:* `test_stop_*` failed on the old
+code — `test_stop_is_idempotent` showed `restore` ran twice; the raising-step
+test propagated the error and skipped restore.
+*Fix:* `stop()` now guards reentrancy (`_stopped` under `_lock`), runs each
+cleanup step in an isolated `try/except` that logs via `logging` and continues,
+always attempts `netinfo.restore_network` last, and logs a warning when it
+reports a partial restore. *Regression:*
+`test_stop_runs_restore_even_if_a_step_raises`, `test_stop_is_idempotent`.
+
+**CTL-2 (documented) — `start()` has no partial-startup cleanup.** `start()`
+acquires engine resources (engage_mitm, traffic/scanner/protector threads, tc,
+intel sniffer) with no rollback if one fails mid-way (AGENTS.md: "failure during
+partial startup triggers cleanup"). Lower risk now that `engage_mitm` returns a
+bool instead of raising and the `.start()` methods self-guard; a `try: … except:
+self.stop()` wrapper is a clean follow-up but deferred to keep this batch tight.
+
+**CTL-3 (documented, cross-file) — Cross-thread UI via callbacks.** `cut_device`'s
+worker thread and the scan thread call the `log=` callback (`Dashboard.
+log_tactical` → `status_box.insert`), and `on_protection_alert` is invoked from
+the protector's sniffer threads. Tkinter is not thread-safe. The controller is
+only invoking a supplied callback; the marshalling fix (`after()`/queue) belongs
+in `ui/dashboard.py` and is tracked there for the Phase-2 UI pass.
+
+**CTL-4 (documented) — Optimistic cut state vs `arp.cut` result.** `cut_device`
+sets `dev.cut=True`/`status="cut"`/`traffic.mark_cut` before the worker runs; if
+`arp.cut` returns False the device stays shown as CUT. The dangerous "shows CUT
+but nothing happened" case is already prevented (an unknown IP fails the
+`devices.get` guard first); the residual is a cosmetic log mismatch
+("resolution failed" while the L1 DROP is actually in place). Ties into ARP-3;
+an `arp.cut` result enum (FULL/DROP-ONLY/FAILED) is the clean cross-file fix.
+
+**CTL-5 (documented) — Unbounded background threads.** Each scan spawns a recon
+thread (`asyncio.run`, 5 s grace) and a fingerprint thread per device, plus a
+thread per cut. They are daemon and self-terminating (no leak), but uncapped;
+a shared executor is an architecture improvement for Phase 4/7.
+
+Verification (controller batch):
+`pytest -q` → **33 passed** (+2) · `ruff check` / `ruff format` on changed
+files → clean · `mypy core/controller.py` → clean.
+
+**Limits (controller):** CTL-1 is proven with mocked subsystems — it verifies
+the control flow (restore always runs, exactly once). It does not prove the real
+teardown sequence against a live kernel. CTL-2–5 remain open as documented.
+
+---
+
 ## Tool & Dependency Tribunal — 2026-11-19 (Phase 3)
 
 Matrix only — no dependency or config changes made in this phase. Evidence is
