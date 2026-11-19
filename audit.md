@@ -490,6 +490,74 @@ FORWARD rule insertion/ordering on a live kernel.
 
 ---
 
+### `core/protector.py` — RESOLVED (2 fixed) + 4 documented
+
+| ID | Sev | Location | Status |
+|----|-----|----------|--------|
+| PROT-1 | Medium | `_self_healing_sentry` | **Fixed** |
+| PROT-4 | Medium | `enable_arp_guard` | **Fixed** |
+| PROT-2 | Medium | alert callbacks from sniffer/sentry threads | Documented (cross-file → dashboard) |
+| PROT-3 | Medium | kill-switch self-undo | Documented (design) |
+| PROT-5 | Low | reputation dict unbounded / lockless | Documented |
+| PROT-6 | Low | `start()` re-entry vs winding-down threads | Documented |
+
+**PROT-1 — Sentry IndexError on malformed `/proc/net/arp` lines aborts the scan.**
+`_self_healing_sentry` did `parts = line.split(); if parts[0] == gateway: if
+parts[2] != "0x6"` with no length check. A blank/truncated line → `parts[0]`
+IndexError, swallowed by the surrounding `except Exception: pass` — which breaks
+out of the whole `for` loop, so any malformed line *before* the gateway row
+means the gateway lock isn't checked that cycle. *Fix:* extracted the parse into
+`_gateway_is_unlocked(arp_text)` that skips short lines (`len(parts) < 3:
+continue`); the sentry reads the file (narrow `OSError`) and calls the helper.
+*Regression:* `test_gateway_unlocked_handles_malformed_lines`,
+`test_gateway_locked_returns_false`, `test_gateway_absent_returns_false`.
+
+**PROT-4 — `enable_arp_guard` reports false success.** It ran `ip neigh replace`
+inside a `try` and set `arp_guard_enabled = True` / returned True regardless of
+the command's result, so a failed kernel lock still logged "ARP Guard ACTIVE".
+It also didn't validate the gateway. *Fix:* validate gateway with `ipaddress`;
+check `returncode`; only mark enabled / return True on `rc == 0`, else log and
+return False. *Regression:* `test_enable_arp_guard_reports_command_failure`,
+`test_enable_arp_guard_rejects_invalid_gateway`, `test_enable_arp_guard_success`.
+
+**PROT-2 (documented, cross-file) — Cross-thread UI.** `_arp_cb` (sniffer thread)
+and the sentry thread call `self.ctrl.on_protection_alert(...)`, which the
+dashboard wires to `log_tactical` → `status_box.insert` (Tk). Same hazard family
+as CTL-3; the marshalling fix belongs in `ui/dashboard.py`.
+
+**PROT-3 (documented, design) — Kill-switch undoes itself.** `_trigger_kill_switch`
+inserts an OUTPUT DROP ("emergency network shutdown") then calls `ctrl.stop()`,
+whose `protector.stop()` → `disable_kill_switch()` immediately **removes** that
+DROP. So the network is dropped then restored within one trigger — the kill
+cutoff doesn't persist. Whether the network *should* stay cut (requiring manual
+`iptables -D`) or be restored is a genuine design choice with user-safety
+implications; not changed unilaterally. Flagged for a product decision (Phase 6/7).
+
+**PROT-5 (documented) — `reputation` dict.** Grows one entry per observed `psrc`
+(and a MAC set per entry) with no eviction; mutated only from the single sniffer
+callback thread (so no race), but an unbounded slow memory growth on a busy LAN.
+
+**PROT-6 (documented) — `start()` re-entry.** Guards `if self._running`, but
+after `stop()` a fresh `start()` can spawn new monitor/sentry threads while the
+previous `sniff()` loops are still winding down (up to their 30 s timeout).
+Daemon threads, so no leak at exit; brief duplication only.
+
+**Clean:** Windows handling here is explicit (sentry returns early;
+`enable_arp_guard` returns False with an "not supported" log; kill-switch guards
+`if not _IS_WINDOWS`) — no fake-success no-ops. Rule ordering N/A.
+
+Verification (protector batch):
+`pytest -q` → **45 passed** (+6) · `ruff check` / `ruff format` on changed
+files → clean · `mypy core/protector.py` → clean.
+
+**Limits (protector):** proven with mocked subprocess + synthetic `/proc/net/arp`
+text — verifies the parse robustness and the success/failure signal, not live
+kernel neighbour behaviour. Note: `_valid_ip` is now duplicated across `arp.py`,
+`iptables_manager.py`, and `protector.py` — a small shared helper is a Phase-4
+consolidation item.
+
+---
+
 ## Tool & Dependency Tribunal — 2026-11-19 (Phase 3)
 
 Matrix only — no dependency or config changes made in this phase. Evidence is
