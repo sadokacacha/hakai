@@ -736,6 +736,68 @@ NAT redirection or DNS interception on a live host.
 
 ---
 
+### `network/recon_engine.py` — RESOLVED (4 fixed) + 2 documented
+
+*Reliability only (recon is best-effort intel) — connection cleanup + input
+validation, not recon accuracy.*
+
+| ID | Sev | Location | Status |
+|----|-----|----------|--------|
+| RECON-1 | Medium | `get_ssl_cert_cn` | **Fixed** |
+| RECON-2 | Medium | `get_upnp_friendly_name` | **Fixed** |
+| RECON-4 | Low-Med | `run_recon` | **Fixed** |
+| RECON-10 | Low | `get_event_loop()` | **Fixed** |
+| RECON-5 | Low | `get_ipv6_neighbor` uncorrelated result | Documented |
+| RECON-7 | Low | fragile DER byte-scan | Documented |
+
+**RECON-1 — SSL probe leaks the connection on error.** `get_ssl_cert_cn` called
+`writer.close()` only after `getpeercert()` succeeded; any exception (e.g.
+`ssl_obj` is None → AttributeError) hit `except: return ""` and left the opened
+connection unclosed. Recon runs per device per scan, so this leaks a socket on
+every failed probe. *Fix:* `try/finally` closes the writer on all paths (and
+guards `ssl_obj` being None). *Regression:* `test_ssl_cert_cn_closes_writer_on_error`.
+
+**RECON-2 — UPnP probe leaks a connection per failed port.** Same pattern,
+inside a 3-port loop: a read/parse failure skipped `writer.close()` and
+`continue`d to open the next port. *Fix:* per-iteration `writer = None` +
+`finally` close. *Regression:* `test_upnp_closes_every_writer_on_error`.
+
+**RECON-4 — No target validation in `run_recon`.** Only `get_ptr_record`
+validated its inputs; ssl/upnp/netbios would try to connect to a garbage host
+(triggering DNS lookups). *Fix:* `ipaddress.ip_address(ip)` guard at the top of
+`run_recon`, returning the empty result dict on failure. *Regression:*
+`test_run_recon_rejects_invalid_ip`.
+
+**RECON-10 — Deprecated `get_event_loop()`.** Two `asyncio.get_event_loop()`
+calls (inside running coroutines) replaced with `asyncio.get_running_loop()` —
+`get_event_loop()` is deprecated and breaks on Python 3.14 (this host) when no
+loop is current.
+
+**RECON-5 (documented) — `get_ipv6_neighbor` returns the wrong neighbor.** It
+returns the first `ip -6 neigh` line's address with no correlation to the target
+(the comment admits "this logic would match MAC…" but doesn't). The resulting
+`ipv6_ll` field is **not consumed by `classify_device`**, so the wrong value is
+inert — documented, not fixed (a real correlation would be a recon-accuracy
+change, out of scope).
+
+**RECON-7 (documented) — Fragile DER scan.** `get_ssl_cert_cn` locates the CN by
+ad-hoc byte offsets rather than parsing the certificate; accuracy issue, not
+reliability.
+
+**Clean:** `get_netbios_name` closes its transport in `finally` correctly;
+subprocess probes (`dig`, `ip -6 neigh`) use arg lists and degrade on a missing
+binary; the per-call semaphore is intentional (fresh loop per thread).
+
+Verification (recon batch):
+`pytest -q` → **62 passed** (+3) · `ruff check` / `ruff format` on changed
+files → clean · `mypy network/recon_engine.py` → clean.
+
+**Limits (recon):** leak fixes proven with a mocked `open_connection` whose
+writer records `close()`; validation proven with a mocked transport. Real TLS/
+UPnP/NetBIOS probing against live hosts is not exercised.
+
+---
+
 ## Tool & Dependency Tribunal — 2026-11-19 (Phase 3)
 
 Matrix only — no dependency or config changes made in this phase. Evidence is
