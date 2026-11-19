@@ -12,6 +12,289 @@ Severity scale:
 
 ---
 
+## Baseline — 2026-11-19 (Phase 0)
+
+Read-only baseline captured before any Phase-1+ changes. No edits to code,
+no installs, no upgrades. Measured on this host, not the committed 2026-10-13
+figures.
+
+**Environment:** Linux (Arch, kernel 7.2.9-arch1-1), Python **3.14.8**,
+project `.venv`. Installed: scapy 2.8.0, customtkinter 6.0.0, Pillow 12.3.0,
+pytest 9.1.1, ruff 0.17.0, mypy 2.4.0. (Prior committed baseline was Windows
+11 / Python 3.13.15 — environment changed, so figures are re-measured.)
+
+**Scope decision (this session):** reliability & quality only. Restoration,
+resource/lifecycle cleanup, idempotency, defensive `protector`, tests,
+subprocess/input hardening, dependency hygiene, and UI shell are in scope.
+Crashes/leaks in the offensive/evasion modules are in scope to *fix*, but
+improving their real-world effectiveness is out of scope. No live disruptive
+network tests — mocks/fixtures only.
+
+### Commands run and actual results
+
+| Command | Result |
+|---|---|
+| `git status --short` | 34 files modified (working tree), `run.bat` staged-deleted, `AGENTS.md` + `run.sh` untracked |
+| `git stash list` | empty |
+| `git log -5 --oneline` | `4f6b9bc` updating claude · `b935828` Add tooling config… · `8186592` Rewrite audit.md… · `95636c1` Tidy requirements… · `c6bfe88` Validate bandwidth-limit input |
+| `pytest -v` | **22 passed** in 0.33s |
+| `ruff check .` | **All checks passed!** |
+| `ruff format --check .` | **35 files would be reformatted**, 8 already formatted |
+| `mypy .` | **Success: no issues found in 39 source files** (14 `annotation-unchecked` notes only) |
+| `pip list --outdated` | minor bumps available: mypy 2.4.0→2.4.1, pillow 12.3.0→13.0.0, pytest 9.1.1→9.2.0, ruff 0.17.0→0.17.5, pluggy, mypy_extensions, pip |
+
+### Existing failures / gaps
+
+- **No test failures.** Suite is green (22 tests).
+- **Formatting drift:** the uncommitted working tree (5737 insertions /
+  5901 deletions across 37 files) is not `ruff format`-clean (35 files). This
+  is the one actionable static signal; everything else passes.
+- **Working tree is a large uncommitted rewrite** — preserved as-is, not
+  stashed or reset.
+- **`ruff format --check` is not part of the committed baseline table** in
+  §0 but is part of the mission's required checks; recording it here.
+
+### Not run / not verifiable here
+
+- **No live GUI launch** (no attempt to drive the Tk mainloop headless).
+- **Privileged network engine not exercised** — Linux engine needs root +
+  real interfaces/packets; out of scope per the reliability-only decision and
+  the no-live-disruption rule. Restoration correctness will be verified by
+  unit tests with mocked subprocess/syscall layers, which does **not** prove
+  real-OS restoration.
+- No dependency installs or upgrades performed.
+
+---
+
+## System Map — 2026-11-19 (Phase 1)
+
+Read-only trace of the full application. No code edited. Purpose: understand
+every module and the 12 runtime paths before changing anything. Issues noted
+here as **Limits** are candidates for the Phase-2 bug hunt, not fixes.
+
+### Module inventory (every module classified)
+
+| Module | Role | Appears in path(s) |
+|---|---|---|
+| `main.py` | entry point, root/dep checks, wiring, mainloop | Startup, Shutdown |
+| `core/controller.py` | central orchestrator, device dict, all ops | all |
+| `core/device.py` | Device model + serialization | Device state |
+| `core/persistence.py` | config/state/nick JSON, OUI dict, `classify_device`, fmt helpers | Startup, Device state, Discovery |
+| `core/protector.py` | ARP guard, kill-switch, sentry, ARP monitor | Protection |
+| `network/arp.py` | 5-layer cut/spoof/restore, MAC resolve, watchdog | Gateway resolution, Cut, Restore |
+| `network/traffic.py` | 3-layer per-IP byte/speed counter | Traffic accounting |
+| `network/scanner.py` | nmap/ARP/arp-table scan + passive discovery + hostname pool | Discovery |
+| `network/fingerprint.py` | nmap -O -sV background fingerprint | Discovery |
+| `network/recon_engine.py` | async SSL/UPnP/NetBIOS/PTR/IPv6 recon | Discovery |
+| `network/mdns_sniff.py` | mDNS name/class extractor | Discovery |
+| `network/dhcp_sniffer.py` | DHCP opt 55/12/60 OS+hostname extractor | Discovery |
+| `network/oui_lookup.py` | second OUI vendor lookup (`get_vendor`) | Discovery (**dup**, see Limits) |
+| `network/dns_spoof.py` | DNS REDIRECT + spoofed replies | *(independent — unreached, see Limits)* |
+| `network/ipv6.py` | IPv6 RA + rogue DHCPv6 | Feature (Aegis toggle) |
+| `network/deauth.py` | 802.11 PMF-bypass deauth | Cut (L5, WiFi only) |
+| `network/xdp_engine.py` | eBPF XDP drop (needs BCC) | Cut, Shutdown |
+| `system/netinfo.py` | detect net, `engage_mitm`, `restore_network` | Interface/Gateway detect, Startup, Restore, Shutdown |
+| `system/iptables_manager.py` | FORWARD ACCEPT accounting + DROP | Traffic accounting (DROP half is **dead**, see Limits) |
+| `system/tc_manager.py` | HTB per-IP bandwidth shaping | Limit |
+| `system/stealth.py` | Mirage cloak (MAC/hostname/nft) | Feature (evasion) |
+| `system/masquerade.py` | TTL/timestamp sysctl spoof | Feature (evasion) |
+| `system/chameleon.py` | MTU/MSS clamp | Feature (evasion) |
+| `system/firewall_apex.py` | `GhostFirewall` nft stealth-drop | Feature (evasion) |
+| `system/network_manager.py` | nmcli static IP / DHCP | Feature (Protection panel) |
+| `ui/dashboard.py` | main window, device table, all user commands | UI marshalling, all user ops |
+| `ui/info_dialog.py` | per-device modal (ping/traceroute/fp/reset) | Feature |
+| `ui/protection_panel.py` | defense/stealth/static-IP modal | Feature |
+| `ui/limit_dialog.py` | bandwidth entry modal | Limit |
+| `ui/theme.py` | color/font tokens | Independent infrastructure |
+
+**Independent infrastructure (not in a runtime path):** `ui/theme.py` (tokens),
+`scratch/verify_fix.py` (throwaway), `tests/` (4 files), `conftest.py`.
+
+### The 12 execution paths
+
+**1. Startup** — `main.main()` → `_check_root` (exits if non-root on Linux),
+`_check_deps` (warns on missing nmap/arpspoof/tc/iw), `detect_network`, optional
+`DeauthManager`, `Controller(net)` (constructs all subsystems, `xdp.load()`
+attaches eBPF immediately), `ctrl.start()` → `engage_mitm` (sysctl + promisc +
+ethtool offloads), `traffic.start`, `scanner.start_passive_discovery`,
+`protector.start`, `save_state`, `tc.init`, gateway MAC resolve thread,
+`_start_intel_sniffer`. Then vendor-DB sync thread, `Dashboard(ctrl)`, mainloop.
+*External:* sysctl, ip link, ethtool, iptables (later). *Cleanup:* via Shutdown.
+*Tests:* none (import-level only). **Limits:** `xdp.load()` and `engage_mitm`
+mutate host state at startup before any user action; a crash before `stop()`
+leaves promisc/offloads/XDP applied (Restore path only runs on clean exit).
+
+**2. Interface detection** — `netinfo.detect_network` → `_detect_network_linux`
+parses `ip route` (default line) for gateway+iface, `ip -4 addr` for IP/subnet,
+`ioctl(SIOCGIFHWADDR)` for MAC, `iw dev` for wifi. Captures originals
+(ip_forward, rp_filter, send/accept_redirects, promisc) read-only. *External:*
+ip, iw, cat. *Failure:* no default route → empty iface → `detect` returns mostly
+empty NetInfo; callers guard on `net.iface`. **Limits:** the `_run("cat", ...)`
+reads for original sysctls are read via subprocess rather than file read; the
+per-iface `rp_filter` original is **not** captured (only `all`).
+
+**3. Gateway resolution** — `arp._resolve_macs("", gateway, iface)` (ping to
+force ARP entry → scapy `srp` ×2 → `arp -n` table parse). Called at startup in a
+thread and by `protector.enable_arp_guard`. *Failure:* returns `""` MACs; cut/
+guard degrade. **Limits:** best-effort, no retry ceiling surfaced to UI.
+
+**4. Discovery** — two sub-paths. *Active:* `controller.scan` →
+`scanner.scan` (nmap -sn → nbstat/mdns script → scapy ARP sweep → arp table,
+all merged) → merge into `devices` under lock → `ipt.add_accounting` per IP →
+`classify_device` → async `resolve_hostname`, `fingerprint`, `run_deep_recon`.
+*Passive:* `scanner._passive_sniff` (mDNS/SSDP/NBNS/LLMNR/DHCP) + controller
+`_start_intel_sniffer` (DHCP opt55/12 + mDNS + DNS correlation + TTL/window).
+All feed `classify_device`'s confidence scoring. *External:* nmap, arp, dig.
+*Tests:* `test_network_helpers` (infer_os, vendor), `test_persistence`
+(sanitizers, classify). **Limits:** `recon_engine.get_ssl_cert_cn` does ad-hoc
+DER byte-scanning (fragile); two OUI tables feed two different lookups.
+
+**5. Device state** — `Controller.devices: dict[ip,Device]` guarded by
+`self._lock`; all sniffer callbacks mutate under lock; iteration uses
+`snapshot_devices()`. `Device.to_state()` → `persistence.save_state`. Nickname is
+a property persisted by MAC. *Tests:* `test_persistence` (classify paths).
+**Limits:** `save_state` only called at startup and on explicit `save_state()`;
+no periodic persistence; loaded `state.json` is never re-hydrated into `devices`
+(write-only).
+
+**6. Traffic accounting** — `TrafficCounter.start` spawns `_proc_loop`
+(/proc/net/dev), `_ipt_loop` (parse `iptables -L FORWARD -v -x`), `_scapy_loop`
+(per-packet). `get`/`get_usage`/`get_mode` read merged counters. ACCEPT rules
+added by `ipt.add_accounting` during scan. *External:* iptables, /proc.
+*Tests:* `test_traffic_spd_window`, `test_tc_burst`. **Limits:** counters are
+process-lifetime only; `_ipt_loop` reconciles by string-matching the chain.
+
+**7. Cut** — `controller.cut_device` sets `dev.cut/status`, `traffic.mark_cut`,
+then worker thread: `arp.cut` (`_apply_drop` iptables DROP at FORWARD pos 1 →
+`spoof`: resolve MACs → scapy flood + ICMP redirect + gratuitous ARP →
+`arpspoof` fallback → watchdog) → `xdp.add_drop` → optional WiFi
+`deauth.start_pmf_bypass`. `cut_all` loops. *External:* iptables, sysctl,
+arpspoof, scapy. *Tests:* `test_iptables_manager` (bookkeeping only, mocked).
+**Limits:** `IPTManager.add_drop/remove_drop/is_dropped` are **dead code** — the
+real DROP is done inside `arp.py` directly; the manager only does accounting.
+UI marks a device CUT before the worker confirms MAC resolution.
+
+**8. Restore** — `controller.restore_device` → `arp.restore` (stop flood, kill
+arpspoof pgroup, `_remove_drop` ×3, send 5× real ARP replies) → `dns.stop_spoof`
+→ `xdp.remove_drop` → `tc.unlimit` if limited → reset `dev` flags →
+`traffic.unmark_cut`. `restore_all` loops over cut/limited. *Tests:*
+`test_iptables_manager::test_cleanup_clears_all`. **Limits:** restore success is
+not verified against the real ARP table; `restore_device` does not remove the
+FORWARD ACCEPT accounting rule (left until `stop`).
+
+**9. Protection** — `Protector.start` spawns `_monitor_loop` (scapy ARP sniff →
+reputation/spoof/gateway-conflict detection → optional self-heal / kill-switch)
+and `_self_healing_sentry` (poll /proc/net/arp every 0.5 s, re-pin gateway
+NUD_PERMANENT). `enable_arp_guard` sets `ip neigh ... nud permanent`;
+`toggle_kill_switch` inserts a marked OUTPUT DROP on trigger. *External:* ip
+neigh, iptables, scapy. *Tests:* none directly. **Limits:** `_self_healing_sentry`
+indexes `parts[2]`/`parts[0]` of /proc/net/arp lines without a length guard
+(broad `except` swallows it); `on_protection_alert` is invoked from sniffer
+threads straight into the Tk log (see path 12).
+
+**10. Shutdown** — `Dashboard.on_close` → `controller.stop`: `_running=False`,
+`arp.restore_all`, `arp.stop_watchdog`, `dns.stop_all`, `xdp.unload`,
+`traffic.stop`, `protector.stop`, `tc.teardown`, `ipt.cleanup`, `ipv6.stop`,
+`scanner.stop_passive_discovery`, `restore_network`, `disengage_stealth` if
+active → `self.destroy()`. *External:* iptables, tc, sysctl, ip link, nft.
+**Limits:** `restore_network` reverts ip_forward/rp_filter(all)/redirects/
+promisc/ethtool but **not** `proxy_arp=1` nor per-iface `rp_filter` set by
+`engage_mitm` — partial restoration. Sniffer threads have `timeout=10–30 s`, so
+they linger (daemon, so process exit is fine). No cleanup on crash/KeyboardInt.
+
+**11. Error propagation** — pervasive broad `try/except … pass` (netinfo,
+engage/restore, arp layers, sniff loops, dns, ipv6, stealth). Subprocess calls
+use `capture_output=True` and mostly ignore `returncode`. User-visible errors go
+through the `log=` callback where present. **Limits:** AGENTS.md "do not assume a
+command succeeded" is widely violated; failures are silent. This is the single
+biggest reliability theme and the core of the Phase-2 hunt.
+
+**12. UI thread marshalling** — `Dashboard._refresh_loop` runs on the Tk thread
+via `after(1200,…)` and is the safe path. **But** `_start_scan` runs
+`controller.scan` in a worker thread that calls `self.log_tactical(...)` (→
+`status_box.insert`) directly, and `on_protection_alert`
+(= `log_tactical`) is called from the protector's sniffer threads. Tkinter is
+not thread-safe; these are cross-thread widget writes. **Limits:** no
+marshalling (`after`/queue) between background threads and the Tk log — a
+confirmed concurrency hazard flagged by AGENTS.md.
+
+### Dead ends / reachability notes
+
+- `network/dns_spoof.py`: `controller.toggle_dns_spoof` exists but **no caller**
+  wires a "start DNS spoof" control; only `restore_device`/`stop_all` call
+  `stop_spoof`. Feature is effectively unreachable (Phase-6 verdict pending).
+- `system/iptables_manager.py` DROP half: unreferenced; `arp.py` owns cuts.
+- `network/oui_lookup.py` vs `persistence._OUI_DB`: two parallel OUI stores.
+- `Dashboard._on_ttl_change` / `limit_dialog` sparkline history: defined, lightly
+  used; to be reviewed in Phase 6/7.
+
+---
+
+## Bug Hunt — 2026-11-19 (Phase 2)
+
+One file per invocation. Each confirmed bug has a mocked regression test that
+failed on the old code and passes on the fix. Mocked evidence proves the logic
+issues the right commands; it does **not** prove real-kernel restoration (needs
+root + a live NIC — see Limits).
+
+### `system/netinfo.py` — RESOLVED (3 bugs fixed, 1 clean note)
+
+| ID | Sev | Location | Status |
+|----|-----|----------|--------|
+| NET-1 | High | `engage_mitm` / `restore_network` | **Fixed** |
+| NET-2 | Medium | `restore_network` (ethtool) | **Fixed** |
+| NET-3 | Medium | `engage_mitm` / `restore_network` | **Fixed** |
+
+**NET-1 — Incomplete state restoration (app-vs-OS drift).**
+`engage_mitm` set `net.ipv4.conf.all.proxy_arp=1` and
+`net.ipv4.conf.<iface>.rp_filter=0`, but the old `restore_network` reverted
+neither (it only handled `all.rp_filter`, forwarding, redirects, promisc). After
+a clean shutdown the host was left with proxy-ARP **enabled** and reverse-path
+filtering **disabled** on the interface — a security-relevant, silent drift.
+*Evidence:* old `restore_network` had no `proxy_arp` or per-iface `rp_filter`
+write; `NetInfo` had no field to capture them.
+*Fix:* capture `_orig_proxy_arp` and `_orig_iface_rp_filter` read-only during
+detection; revert both in `restore_network`.
+*Regression:* `test_restore_reverts_every_engaged_sysctl` — asserts every sysctl
+`engage_mitm` writes is reverted to its captured original.
+
+**NET-2 — Offloads force-restored to "on" instead of original.**
+Old `restore_network` ran `ethtool -K … gro on lro on tso on gso on`, enabling
+offloads that may have been **off** before Hakai started (originals never
+captured). *Fix:* capture `_orig_offloads` via `ethtool -k` during detection;
+restore each feature to its captured state, and skip entirely if nothing was
+captured. *Regression:* `test_restore_offloads_to_captured_state_not_blindly_on`.
+
+**NET-3 — Silent subprocess failures / no success signal.**
+Both functions wrapped everything in one `except Exception: pass` and ignored
+every `returncode`, so a failed restore was invisible (violates AGENTS.md "do
+not assume a command succeeded" and "never report restoration successful without
+verification"). *Fix:* `_write_sysctl`/`_set_promisc`/ethtool helpers check
+`returncode`, log via `logging` on failure, and `restore_network`/`engage_mitm`
+now **return bool**; a partial restore logs a warning and returns False.
+*Regression:* `test_restore_reports_failure`, `test_restore_reports_success`.
+
+Also hardened in the same pass (no behaviour change): replaced the broad
+`except Exception` around detection with specific `OSError`/`SubprocessError`;
+swapped the `cat /proc/...` reads for `sysctl -n` with a safe default so a
+failed read can't masquerade as a real captured original.
+
+**Clean note (not changed):** Windows detection path is detection-only and does
+not pretend privileged ops succeed, so the "Windows no-op" check passes here.
+IPv6 gateway is not detected by `netinfo` — that is a scope gap, not a bug.
+
+**Limits:** restoration correctness is proven only against a mocked
+`subprocess`. Real-host verification (that the kernel actually returns to the
+captured values) still requires a root Linux session and is unverified here.
+`restore_network` now returns a success bool, but `controller.stop()` does not
+yet consume it — surfacing that to the UI is a later-phase item.
+
+Verification (this batch):
+`pytest -q` → **26 passed** (22 + 4 new) · `ruff check` changed files → clean ·
+`ruff format` changed files → clean · `mypy .` → no issues (40 files).
+
+---
+
 ## 0. Re-audit — 2026-10-13
 
 **Environment:** Windows 11, Python 3.13.15, project `venv/` (scapy 2.8.0,
