@@ -2073,16 +2073,27 @@ place here as a thin delegating wrapper to keep this change a pure consolidation
 
 ### PROPOSED (named problems, not yet implemented)
 
-**P4-2 — Collapse the 4-way OUI lookup (INVESTIGATE→REMOVE one path).**
-*Problem:* vendor lookup exists twice — `core/persistence` (`_OUI_DB` static dict
-+ `lookup_oui` via optional `mac_vendor_lookup`) **and** `network/oui_lookup`
+**P4-2 — Collapse the 4-way OUI lookup. DONE.**
+*Problem:* vendor lookup existed twice — `core/persistence` (`_OUI_DB` static
+dict + `lookup_oui` via optional `mac_vendor_lookup`) **and** `network/oui_lookup`
 (`FALLBACK_OUI` static dict + `get_vendor` via optional `ouilookup`). Two static
-dicts, two optional libraries, two entry points; callers pick inconsistently
-(`scanner` uses `lookup_oui`, controller intel callbacks use `get_vendor`).
-*Fix:* keep one module (recommend `persistence.lookup_oui` as canonical, merge
-the two dicts, drop one optional lib), route all callers through it. Medium
-effort, touches classification; own as a dedicated batch. Grep first to prove the
-removed path has no remaining refs.
+dicts (measured mostly **disjoint** — 136 of FALLBACK's 142 prefixes absent from
+`_OUI_DB`), two optional libraries, two lookup implementations, two entry points
+that `scanner`/`device` vs the controller intel callbacks picked inconsistently.
+*Change:* `FALLBACK_OUI` moved **verbatim** into `persistence` as `_FALLBACK_OUI`
+(no risky re-keying — each table keeps its own case, `lookup_oui` now returns
+`_OUI_DB.get(upper) or _FALLBACK_OUI.get(lower)`), so the single `lookup_oui` now
+resolves the **union** of both tables. `network/oui_lookup` shrank to a thin
+presentation layer: `get_vendor` normalises dashes, delegates to `lookup_oui`,
+and keeps the privacy-bit/`Unknown Device` output the controller expects; the
+redundant `ouilookup` optional library and its per-call `OuiLookup()`
+instantiation are gone (dropped from `requirements.txt`). *Result:* **one lookup
+function, one optional lib, one entry point** (two data tables, both in one
+module). Behaviour preserved — `test_get_vendor_fallback_dict` (incl. the dash
+form) still passes, and `lookup_oui` now resolves *more* MACs (the union), which
+is additive. No import cycle (`oui_lookup` → `persistence` → `netutil`, verified).
+*Verification:* `pytest` **118 passed**, `ruff`/`mypy` clean (65 files), behaviour
+spot-check green.
 
 **P4-3 — Remove dead code.** *Problem:* carrying unreachable code that confuses
 maintenance. (a) `IPTManager.add_drop/remove_drop/is_dropped/_dropped` — the
