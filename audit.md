@@ -1058,6 +1058,35 @@ not against live multicast mDNS traffic.
 
 ---
 
+## Verification — 2026-11-20 (Phase 8, mdns batch)
+
+Full gates after the `network/mdns_sniff.py` batch. Passed pre-commit (p2.md);
+p8 confirms, nothing new.
+
+### Quality gates (actual output)
+
+| Gate | Result | Evidence |
+|------|--------|----------|
+| `pytest -v` | **80 passed** in 0.35s (2 new mdns) | unit (real scapy packets, no network) |
+| `ruff check .` | **All checks passed** | static |
+| `ruff format --check .` | 20 would reformat / 48 clean — the 20 are **pre-existing WIP** (count still dropping 21→20); my 2 files → **already formatted** | static |
+| `mypy .` | **Success: no issues in 53 source files** | static |
+
+### Functional checks (actual output)
+
+| Check | Result | Evidence |
+|-------|--------|----------|
+| **Imports** | **29/29** modules import cleanly | integration (import-level), Linux, non-root |
+| **Parsing (resource/correctness)** | `qdcount=1` header with **2** real questions → both parse (`Host a`, `Host b`) + the `_googlecast` service label; `qdcount=65535` with 1 record → only `Printer`, no error, no over-call | unit (hand-built scapy packets) |
+| **Shutdown / config / UI** | unchanged this batch | — |
+
+### Not verified (honest gaps)
+- No live multicast mDNS traffic — the parse is exercised with constructed
+  packets. IPv6 mDNS (MDNS-1) and TXT model detection (MDNS-5) remain documented
+  gaps, intentionally not expanded (recon reach/accuracy).
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, xdp batch)
 
 Full gates after the `network/xdp_engine.py` batch. Passed the full gates
