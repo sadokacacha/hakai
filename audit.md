@@ -856,6 +856,50 @@ function/mocked-`urlopen` tests; live SSDP/nmap/ARP scanning is not exercised.
 
 ---
 
+## Verification — 2026-11-20 (Phase 8, scanner batch)
+
+Full gates run after the `network/scanner.py` batch. Every result is labelled by
+evidence type. **A green mocked test proves the control flow, not real-kernel /
+real-network behaviour.**
+
+### Quality gates (actual output)
+
+| Gate | Result | Evidence type |
+|------|--------|---------------|
+| `pytest -v` | **68 passed** in 0.81s | unit + mocked (no real sockets/iptables) |
+| `ruff check .` | **All checks passed** (after fixing one I001 — see below) | static |
+| `ruff format --check .` | **24 would reformat, 40 already formatted** — the 24 are the pre-existing **uncommitted WIP** files I never touched; **all 21 .py files in my commits are format-clean** | static |
+| `mypy .` | **Success: no issues in 49 source files** | static |
+
+**I001 caught by this phase (real miss).** `tests/test_scanner.py` was committed
+(scanner batch) with an un-sorted import block — my per-file `ruff check` in that
+batch ran before the final `ruff format` and I didn't re-check the test file.
+`ruff check .` here flagged it; fixed (removed a stray blank line) in this phase.
+This is exactly the kind of slip p8 exists to catch.
+
+### Functional checks (actual output)
+
+| Check | Result | Evidence type |
+|-------|--------|---------------|
+| **Imports** | **29/29** modules across core/network/system/ui import cleanly | integration (import-level), Linux, non-root |
+| **Startup structure** | `main.py` parses; top-level calls `_fix_sys_path`, `_check_root`, `_check_deps`. `_check_root` calls `sys.exit(1)` when not root **by design**, so `import main` can't run headless as non-root | static; full GUI startup is **root-required + manual** |
+| **Config migration** | `db.get('refresh_ms')` → 1200; `db.get('unknown_key', 42)` → 42; a legacy/partial `config.json` missing newer keys still returns `DEFAULT_CFG` values; `_load(missing)` → default | unit |
+| **Shutdown / resource cleanup** | `Controller.stop()` runs every teardown step in isolation and always reaches `restore_network`, exactly once, even when a step raises (`test_controller_stop`); ARP flood/arpspoof, recon sockets, DNS/iptables rules each have a verified cleanup path | **mocked/unit** — real kernel/NIC/iptables teardown is **root-required + manual**, unverified here |
+| **UI callbacks** | `test_dashboard_wires_info_and_protection_dialogs` passes (wiring present) | static/mocked; live Tk event loop is **manual** |
+
+### What is NOT verified (honest gaps)
+
+- **No real packet/ARP/iptables/tc/sysctl behaviour** — every engine test mocks
+  the subprocess/socket/scapy layer (labelled mocked throughout §Phase-2).
+- **No live GUI** — Tk mainloop not driven; no screenshots (Phase-6 work).
+- **No root / lab-network run** — restoration correctness is proven only against
+  mocked `subprocess`; real-OS revert of promisc/rp_filter/proxy_arp/offloads and
+  real FORWARD rule insertion/ordering remain **root-required + manual**.
+- `ruff format` on the whole tree still reports the user's **pre-existing 24-file
+  WIP drift**, deliberately left untouched (not mine to reformat).
+
+---
+
 ## Tool & Dependency Tribunal — 2026-11-19 (Phase 3)
 
 Matrix only — no dependency or config changes made in this phase. Evidence is

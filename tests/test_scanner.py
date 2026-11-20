@@ -17,7 +17,6 @@ import urllib.request
 from network import scanner as scan_mod
 from network.scanner import Scanner
 
-
 # ── SCAN-3: UPnP LOCATION scheme guard ───────────────────────────────────────
 
 
