@@ -37,3 +37,11 @@ def valid_dns(dns: str) -> bool:
     """True if dns is a non-empty comma-separated list of valid IP addresses."""
     parts = [p.strip() for p in dns.split(",") if p.strip()]
     return bool(parts) and all(valid_ip(p) for p in parts)
+
+
+def randomized_mac(mac: str) -> bool:
+    """True if mac is locally administered / randomised — the U/L bit is set, i.e.
+    the second hex digit is 2, 6, A, or E."""
+    if not mac or len(mac) < 2:
+        return False
+    return mac[1].upper() in ("2", "6", "A", "E")

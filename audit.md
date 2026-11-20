@@ -2052,6 +2052,25 @@ files; caught immediately via `wc -l` vs HEAD, reverted cleanly from the
 per-batch commits, and redone with exact-string replacement — a concrete payoff
 of committing every batch.)*
 
+### IMPLEMENTED — P4-1b: fold the MAC-randomization check into `core/netutil`
+
+**Problem (named, evidenced):** the locally-administered-bit (MAC randomization)
+check existed in **3** copies — `core/persistence.is_private_mac` and
+`core/persistence.is_stealth_mac` (identical logic, same file) and
+`network/oui_lookup.is_randomized` — the same `mac[1].upper() in ("2","6","A","E")`
+written three times (one even uses a list, two use tuples). `is_private_mac` is
+additionally dead (no app caller, only a test).
+**Change:** added `core/netutil.randomized_mac(mac)` (single implementation,
+with the robust `not mac or len(mac) < 2` guard). The three public helpers now
+delegate to it, keeping their names/signatures so all callers and the three
+existing tests (`test_is_private_mac`/`test_is_stealth_mac`/`test_is_randomized`)
+pass unchanged; added `test_randomized_mac`. No import cycle (`persistence` and
+`oui_lookup` both import the leaf `core.netutil`; verified by importing them).
+*Verification:* `pytest` **118 passed** (+1), `ruff check .`/`mypy .` clean (65
+files), `grep` confirms the `mac[1].upper() in …` logic now lives **only** in
+netutil. *(`is_private_mac` is still dead — a P4-3 removal candidate; left in
+place here as a thin delegating wrapper to keep this change a pure consolidation.)*
+
 ### PROPOSED (named problems, not yet implemented)
 
 **P4-2 — Collapse the 4-way OUI lookup (INVESTIGATE→REMOVE one path).**

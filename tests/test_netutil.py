@@ -2,7 +2,18 @@
 
 from __future__ import annotations
 
-from core.netutil import valid_cidr, valid_dns, valid_ip
+from core.netutil import randomized_mac, valid_cidr, valid_dns, valid_ip
+
+
+def test_randomized_mac():
+    # U/L bit set → second hex digit 2/6/A/E
+    assert randomized_mac("02:11:22:33:44:55")
+    assert randomized_mac("06:aa:bb:cc:dd:ee")
+    assert randomized_mac("0a:11:22:33:44:55")
+    assert randomized_mac("0E:11:22:33:44:55")
+    assert not randomized_mac("00:11:22:33:44:55")
+    assert not randomized_mac("")
+    assert not randomized_mac("a")
 
 
 def test_valid_ip():

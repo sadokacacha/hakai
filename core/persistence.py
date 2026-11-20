@@ -11,6 +11,8 @@ import os
 import threading
 from pathlib import Path
 
+from core.netutil import randomized_mac
+
 _log = logging.getLogger(__name__)
 
 # ── Storage paths ──────────────────────────────────────────────────────────────
@@ -352,10 +354,7 @@ VM_VENDORS = {"VMware", "VirtualBox", "QEMU/KVM", "Parallels", "Xen"}
 
 def is_private_mac(mac: str) -> bool:
     """Detects if a MAC is randomized/private (Locally Administered bit set)."""
-    if len(mac) < 2:
-        return False
-    # Second hex character: 2, 6, A, or E
-    return mac[1].upper() in ("2", "6", "A", "E")
+    return randomized_mac(mac)
 
 
 def lookup_oui(mac: str) -> str:
@@ -405,9 +404,7 @@ _PRINT_PORTS = {515, 631, 9100}
 
 def is_stealth_mac(mac: str) -> bool:
     """Checks if a MAC address is locally administered (randomized)."""
-    if not mac or len(mac) < 2:
-        return False
-    return mac[1].upper() in ("2", "6", "A", "E")
+    return randomized_mac(mac)
 
 
 # ── Protocol noise patterns to strip from mDNS / Bonjour names ────────────────
