@@ -1122,6 +1122,64 @@ that a real NIC's MAC/hostname/nft table actually revert (root + Linux + manual)
 
 ---
 
+### `system/tc_manager.py` — RESOLVED (3 fixed) + 2 documented
+
+| ID | Sev | Location | Status |
+|----|-----|----------|--------|
+| TC-1 | Medium | `limit()` | **Fixed** |
+| TC-2 | Low | `limit()` | **Fixed** |
+| TC-6 | Low | `teardown()` | **Fixed** |
+| TC-3 | Low | `init()` / `teardown()` original qdisc | Documented |
+| TC-win | Low | Windows fake success | Documented (systemic) |
+
+**TC-1 — `limit()` always reports success.** The class `add/change` return code
+only controlled the `for` loop's `break`, the fq_codel/filter results were
+ignored, and `return True` fired unconditionally. So a failed `tc class` (bad
+rate, qdisc not initialised) or failed u32 filter still told the controller/UI
+the limit was applied ("⚡ {ip} → {kb} KB/s"). *Fix:* track `class_ok` and return
+False (setting `last_error`, logging) if the class didn't apply — popping the
+phantom class id so a failed limit leaves no stale state; then check both filter
+return codes and return False if either failed (keeping the class id so
+unlimit/teardown removes it). *Regression:*
+`test_limit_returns_false_when_class_add_fails`,
+`test_limit_returns_false_when_filter_add_fails`, `test_limit_returns_true_when_all_ok`,
+`test_failed_class_add_does_not_leave_phantom_class`.
+
+**TC-2 — No IP validation.** `ip` flowed into the `tc filter … match ip dst/src`
+commands unvalidated. *Fix:* `_valid_ip()` guard; `limit()` returns False and
+issues no command on invalid input. *Regression:* `test_limit_rejects_invalid_ip`.
+
+**TC-6 — `teardown()` raced `_classes`.** It reset `_active`/`_classes`/`_next_id`
+without the lock while `limit`/`unlimit` mutate them. *Fix:* wrap the body in
+`self._lock`.
+
+**TC-3 (documented) — Original qdisc not captured.** `init()` runs
+`tc qdisc del root` before installing HTB, destroying any pre-existing *custom*
+root qdisc; `teardown()`'s `del root` reverts to the kernel default
+(`net.core.default_qdisc`), not whatever custom qdisc was there before. Capturing
+and re-applying an arbitrary qdisc config is complex and rarely needed (most
+hosts use the kernel default); left as a documented limitation.
+
+**TC-win (documented, systemic) — Windows.** `_tc` returns rc=0 on Windows and
+`init()` sets `_active=True` without running `tc`, so `limit()` returns True
+doing nothing (false success). Same cross-platform class as IPT-win/ARP-5.
+
+**Clean:** the `_tc` command construction is correct (`tc <subcmd> <action> dev
+<iface> <params>`); per-IP priorities (`cid*2`/`cid*2+1`) avoid filter collisions
+(a prior fix); `unlimit` removes both filters and the class; `_burst` math is
+unit-tested (`test_tc_burst`).
+
+Verification (tc batch, per updated p2.md):
+per-file `ruff`/`mypy` on **src + test**, then full gates — `pytest -v`
+→ **87 passed** (+5); `ruff check .` → clean; `ruff format --check` my 2 files →
+clean; `mypy .` → no issues (55 files).
+
+**Limits (tc):** `limit()`'s success/failure signalling and validation are proven
+against a mocked `_tc` — no real HTB class/filter is installed and no actual
+bandwidth is shaped (root + Linux + lab + manual).
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, stealth batch)
 
 Full gates after the `system/stealth.py` batch. Passed pre-commit (p2.md); p8
