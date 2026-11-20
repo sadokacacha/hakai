@@ -957,6 +957,41 @@ interface exercised (needs root + a monitor-capable NIC + a lab).
 
 ---
 
+## Verification — 2026-11-20 (Phase 8, deauth batch)
+
+Full gates after the `network/deauth.py` batch. This batch already passed the
+full gates **before commit** (updated p2.md workflow), so p8 is a confirmation —
+and it found nothing new, which is the intended outcome of the workflow change.
+
+### Quality gates (actual output)
+
+| Gate | Result | Evidence |
+|------|--------|----------|
+| `pytest -v` | **73 passed** in 0.35s (3 new deauth + existing `test_deauth_available…` still green) | unit + mocked |
+| `ruff check .` | **All checks passed** | static |
+| `ruff format --check .` | 22 would reformat / 44 clean — the 22 are **pre-existing WIP**; `ruff format --check network/deauth.py tests/test_deauth.py` → **2 already formatted** | static |
+| `mypy .` | **Success: no issues in 51 source files** | static |
+
+No newly-introduced failure (contrast the scanner/ipv6 batches, where p8 caught a
+committed lint/type error — the per-file-includes-tests step now prevents that).
+
+### Functional checks (actual output)
+
+| Check | Result | Evidence |
+|-------|--------|----------|
+| **Imports** | **29/29** modules import cleanly | integration (import-level), Linux, non-root |
+| **Shutdown / cleanup** | `stop_all()` → `_running=False`, `_targets` cleared; a drained `_pmf_loop()` → `_running=False` (so a later start restarts the worker); an inactive manager (`SCAPY_WIFI_OK=False`) starts **0** workers | **mocked/unit** — no real 802.11 frames or monitor-mode NIC; that is **root-required + lab-network + manual** |
+| **Config migration** | unchanged this batch (missing keys → `DEFAULT_CFG`) | unit |
+| **UI callbacks** | unchanged this batch (wiring test passes) | static/mocked; live Tk = **manual** |
+
+### Not verified (honest gaps)
+- No real deauth frames sent, no monitor-mode interface, no AP/client in a lab —
+  the fixed behaviour is the **state machine**, not radio-level disconnection.
+- No live packets/kernel/GUI anywhere in this suite; engine evidence is
+  mocked/static throughout.
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, ipv6 batch)
 
 Full gates after the `network/ipv6.py` batch. Labelled by evidence type. **A
