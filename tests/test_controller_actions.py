@@ -101,3 +101,63 @@ def test_nuclear_stealth_does_not_corrupt_mac_on_cloak_failure(monkeypatch):
     ctrl.toggle_nuclear_stealth(True)
 
     assert ctrl.net.my_mac == "11:22:33:44:55:66", "an empty cloak MAC must not overwrite my_mac"
+
+
+# ── /wire: dormant interception features wired to reachable controls ──────────
+
+
+def test_monitor_device_spoofs_a_valid_target(monkeypatch):
+    ctrl = _ctrl(monkeypatch)
+    dev = _add_device(ctrl)
+    calls: list = []
+    monkeypatch.setattr(ctrl.arp, "spoof", lambda *a, **k: calls.append(a))
+
+    assert ctrl.monitor_device(dev.ip, log=lambda *a: None) is True
+    assert calls == [(dev.ip, ctrl.net.gateway, ctrl.net.iface, ctrl.net.my_ip)]
+
+
+def test_monitor_device_refuses_gateway_and_self(monkeypatch):
+    ctrl = _ctrl(monkeypatch)
+    calls: list = []
+    monkeypatch.setattr(ctrl.arp, "spoof", lambda *a, **k: calls.append(a))
+    # gateway
+    ctrl.devices[ctrl.net.gateway] = Device(ctrl.net.gateway)
+    assert ctrl.monitor_device(ctrl.net.gateway) is False
+    # self
+    me = _add_device(ctrl, ip="192.168.1.50")
+    me.status = "self"
+    assert ctrl.monitor_device(me.ip) is False
+    assert calls == [], "no interception may target the gateway or self"
+
+
+def test_toggle_dns_spoof_propagates_start_result(monkeypatch):
+    ctrl = _ctrl(monkeypatch)
+    dev = _add_device(ctrl)
+
+    monkeypatch.setattr(ctrl.dns, "start_spoof", lambda ip: True)
+    assert ctrl.toggle_dns_spoof(dev.ip, True) is True
+
+    monkeypatch.setattr(ctrl.dns, "start_spoof", lambda ip: False)
+    assert ctrl.toggle_dns_spoof(dev.ip, True) is False, (
+        "must report the truth when REDIRECT failed"
+    )
+
+
+def test_toggle_dns_spoof_off_calls_stop(monkeypatch):
+    ctrl = _ctrl(monkeypatch)
+    dev = _add_device(ctrl)
+    stopped: list = []
+    monkeypatch.setattr(ctrl.dns, "stop_spoof", lambda ip: stopped.append(ip))
+
+    assert ctrl.toggle_dns_spoof(dev.ip, False) is True
+    assert stopped == [dev.ip]
+
+
+def test_toggle_dns_spoof_refuses_gateway(monkeypatch):
+    ctrl = _ctrl(monkeypatch)
+    ctrl.devices[ctrl.net.gateway] = Device(ctrl.net.gateway)
+    started: list = []
+    monkeypatch.setattr(ctrl.dns, "start_spoof", lambda ip: started.append(ip) or True)
+
+    assert ctrl.toggle_dns_spoof(ctrl.net.gateway, True) is False
+    assert started == [], "must not redirect the gateway's own DNS"

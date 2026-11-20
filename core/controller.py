@@ -564,10 +564,23 @@ class Controller:
         dev = self.devices.get(ip)
         if not dev:
             return False
+        if ip == self.net.gateway or dev.status == "self":
+            if log:
+                log(f"✕ Safeguard: refusing DNS redirect on {ip} (Self/Gateway)", "warn")
+            return False
         if state:
-            self.dns.start_spoof(ip)
-        else:
-            self.dns.stop_spoof(ip)
+            ok = self.dns.start_spoof(ip)
+            if log:
+                log(
+                    f"🌐 DNS redirect engaged for {ip}"
+                    if ok
+                    else f"✕ DNS redirect failed for {ip}",
+                    "atk" if ok else "err",
+                )
+            return ok
+        self.dns.stop_spoof(ip)
+        if log:
+            log(f"↺ DNS redirect stopped for {ip}", "info")
         return True
 
     # ── State persistence ─────────────────────────────────────────────────────

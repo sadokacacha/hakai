@@ -4,6 +4,7 @@ These guard the specific defects fixed in that pass so they cannot silently
 come back. They are platform-safe (no root, no live networking): importing the
 UI modules only loads customtkinter, it does not create a Tk root window.
 """
+
 from network.deauth import SCAPY_WIFI_OK, DeauthManager
 
 
@@ -31,3 +32,17 @@ def test_dashboard_wires_info_and_protection_dialogs():
     # Handler methods that the row double-click / sidebar button invoke.
     assert callable(dash.Dashboard._open_info)
     assert callable(dash.Dashboard._open_protection)
+
+
+# ── /wire: dormant interception features are reachable from the dashboard ────
+def test_dashboard_wires_monitor_and_dns_controls():
+    import ui.dashboard as dash
+
+    # Handlers the MONITOR / DNS action buttons invoke (were unreachable before).
+    assert callable(dash.Dashboard._cmd_monitor)
+    assert callable(dash.Dashboard._cmd_dns)
+    # They route through the controller's interception methods.
+    from core.controller import Controller
+
+    assert callable(Controller.monitor_device)
+    assert callable(Controller.toggle_dns_spoof)

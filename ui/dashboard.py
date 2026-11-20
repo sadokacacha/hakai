@@ -9,7 +9,7 @@ import os
 import queue
 import threading
 from datetime import datetime
-from tkinter import TclError, simpledialog
+from tkinter import TclError, messagebox, simpledialog
 
 import customtkinter as ctk
 
@@ -229,6 +229,26 @@ class Dashboard(ctk.CTk):
             text_color=BG,
             font=FONT_SMALL,
             command=self._cmd_rename,
+        ).pack(side="right", padx=5)
+        # Interception controls — active MITM, authorized/isolated lab only.
+        # Stopped via RESTORE (arp.restore + dns.stop_spoof) like CUT.
+        ctk.CTkButton(
+            bar,
+            text="👁 MONITOR",
+            width=95,
+            fg_color=ACCENT,
+            text_color=BG,
+            font=FONT_SMALL,
+            command=self._cmd_monitor,
+        ).pack(side="right", padx=5)
+        ctk.CTkButton(
+            bar,
+            text="🌐 DNS",
+            width=80,
+            fg_color=CYAN,
+            text_color=BG,
+            font=FONT_SMALL,
+            command=self._cmd_dns,
         ).pack(side="right", padx=5)
 
         # --- Table & Intel Split ---
@@ -555,6 +575,47 @@ class Dashboard(ctk.CTk):
     def _cmd_restore(self):
         for ip in list(self._sel_ips):
             self.ctrl.restore_device(ip, log=self.log_tactical)
+
+    def _cmd_monitor(self):
+        """Silent intercept (ARP-spoof, no drop) of the selected device(s)."""
+        ips = list(self._sel_ips)
+        if not ips:
+            self.log_tactical("No device selected — click a row first.", "warn")
+            return
+        # AGENTS.md: operator confirmation required before active interception.
+        if not messagebox.askyesno(
+            "Confirm interception",
+            "Silently intercept (ARP-spoof, no drop) the selected device(s)?\n\n"
+            "This is active MITM — use only on an authorized, isolated lab "
+            "network. Use RESTORE to stop.",
+            parent=self,
+        ):
+            return
+        for ip in ips:
+            self.ctrl.monitor_device(ip, log=self.log_tactical)
+
+    def _cmd_dns(self):
+        """Redirect DNS (iptables REDIRECT) for the selected device(s)."""
+        ips = list(self._sel_ips)
+        if not ips:
+            self.log_tactical("No device selected — click a row first.", "warn")
+            return
+        if not messagebox.askyesno(
+            "Confirm DNS redirect",
+            "Redirect DNS (iptables REDIRECT) for the selected device(s)?\n\n"
+            "This is active MITM — use only on an authorized, isolated lab "
+            "network. Use RESTORE to stop.",
+            parent=self,
+        ):
+            return
+
+        # start_spoof runs iptables synchronously — offload so the UI doesn't
+        # freeze (P4-6 threading discipline). The controller logs the outcome.
+        def _work():
+            for ip in ips:
+                self.ctrl.toggle_dns_spoof(ip, True, log=self.log_tactical)
+
+        run_async(_work, name="dns_spoof")
 
     def _cmd_limit(self):
         """Open limit dialog for the first selected device; apply to all selected."""

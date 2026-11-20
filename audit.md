@@ -2993,3 +2993,68 @@ MAC guard), `core/protector.py` (kill-switch truthfulness), `core/shutdown.py`
 `test_shutdown.py` + `test_controller_actions.py` new, `test_controller_stop.py`/
 `test_protector.py`/`test_chameleon.py` extended. No formatting churn buried any
 diff (format debt unchanged at 8).
+
+---
+
+# /wire — Dormant interception features wired to reachable UI — 2026-11-20
+
+Reachability only — **not new capability** (the implementations already existed;
+P7 #21/#22 deferred wiring here). Both are active MITM, so entry points are
+operator-confirmed and labelled lab-only per AGENTS.md ("require operator
+confirmation before active network operations; isolated lab networks only").
+
+## What was wired
+
+- **Monitor (silent intercept, no drop)** — `Controller.monitor_device(ip)`
+  (ARP-spoof via `arp.spoof`, which registers the target in `_cut_ips` so
+  `restore_device`/`stop()` heal it). New dashboard action button **👁 MONITOR**
+  → `Dashboard._cmd_monitor`, iterating the current selection like `_cmd_cut`.
+- **DNS redirect** — `Controller.toggle_dns_spoof(ip, True)` →
+  `dns.start_spoof`. New button **🌐 DNS** → `Dashboard._cmd_dns`, run **off the
+  Tk thread** via `run_async` (start_spoof runs iptables synchronously; P4-6
+  discipline).
+- **Off-switch:** the existing **↺ RESTORE** already stops both
+  (`restore_device` → `arp.restore` + `dns.stop_spoof`), and `Controller.stop()`
+  tears down DNS NAT rules (`dns.stop_all`) and heals ARP (`arp.restore_all`) on
+  shutdown — so the P9 restoration guarantee covers the wired features.
+
+## Correctness picked up while wiring (the P9-deferred item)
+
+- `dns_spoof.start_spoof` now returns an **honest bool**: it reports `False` and
+  rolls back its optimistic `_spoof_map`/`_running` state when the iptables
+  REDIRECT rule is not installed (previously always `True`). `toggle_dns_spoof`
+  propagates that result and adds a Self/Gateway safeguard (mirrors `cut_device`).
+
+## Tests added (mocked — no real iptables/ARP/sniffer)
+
+- `test_controller_actions.py`: `monitor_device` spoofs a valid target / refuses
+  gateway+self; `toggle_dns_spoof` propagates the start result, calls stop on
+  off, refuses the gateway.
+- `test_dns_spoof.py`: `start_spoof` returns `False` + rolls back when `-I`
+  fails; `True` when the rule is added.
+- `test_regressions.py`: the dashboard exposes `_cmd_monitor`/`_cmd_dns` routing
+  to the controller interception methods.
+
+### P8 (actual)
+`pytest -q` **144 passed** (+8) · `ruff check .` clean · `ruff format --check .`
+7 pre-existing WIP (additive diffs only, no churn — verified via `git diff`) ·
+`mypy .` clean (72 files).
+
+## manual-verify (LAB BOX ONLY — root + isolated network + an allowlisted test device)
+
+These cannot be exercised in CI (mocked) and MUST be confirmed on an authorized,
+isolated lab network against a device you own:
+
+1. **Monitor:** select a lab device → 👁 MONITOR → confirm the dialog. Verify
+   (on the target) its ARP entry for the gateway now points at this host and
+   traffic still flows (no drop); `tcpdump` on this host sees the target's
+   traffic. Then **RESTORE** → verify the target's ARP entry heals and this
+   host stops seeing its traffic.
+2. **DNS redirect:** select a lab device → 🌐 DNS → confirm. Verify a DNS query
+   from the target is REDIRECTed (iptables `nat PREROUTING` shows the rule; the
+   target resolves to the spoofed answer). **RESTORE** → verify the NAT rule is
+   removed and resolution returns to normal.
+3. **Shutdown restoration:** with Monitor and/or DNS active, (a) close the window
+   and (b) Ctrl+C the process — in both cases verify no `hakai`/REDIRECT rule
+   and no stale ARP poisoning remain (`iptables -t nat -S`, `ip neigh`).
+4. **Safeguards:** confirm MONITOR and DNS refuse the gateway and self rows.

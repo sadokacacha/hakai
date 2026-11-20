@@ -57,22 +57,35 @@ class DnsSpoofManager:
         # Add the REDIRECT rule idempotently: -C first so a repeated start can't
         # stack duplicate NAT rules that cleanup would then miss.
         rule = self._rule(target_ip)
+        rule_ok = False
         try:
             chk = subprocess.run(
                 ["iptables", "-t", "nat", "-C", "PREROUTING", *rule], capture_output=True, text=True
             )
-            if chk.returncode != 0:
+            if chk.returncode == 0:
+                rule_ok = True  # already present
+            else:
                 r = subprocess.run(
                     ["iptables", "-t", "nat", "-I", "PREROUTING", *rule],
                     capture_output=True,
                     text=True,
                 )
-                if r.returncode != 0:
+                rule_ok = r.returncode == 0
+                if not rule_ok:
                     _log.warning(
                         "dns_spoof: could not add REDIRECT for %s: %s", target_ip, r.stderr.strip()
                     )
         except (OSError, subprocess.SubprocessError) as e:
             _log.warning("dns_spoof: iptables error: %s", e)
+
+        if not rule_ok:
+            # Report the truth: the REDIRECT is not installed, so DNS is NOT being
+            # intercepted. Roll back the optimistic state we set above.
+            with self._lock:
+                self._spoof_map.pop(target_ip, None)
+                if start_thread:
+                    self._running = False
+            return False
 
         if start_thread:
             threading.Thread(target=self._sniff_loop, daemon=True, name="dns_spoof").start()

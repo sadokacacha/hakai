@@ -71,3 +71,27 @@ def test_stop_spoof_clears_duplicate_rules(monkeypatch):
 
     deletes = [c for c in calls if "-D" in c]
     assert len(deletes) >= 2, "stop_spoof must retry -D to clear duplicate NAT rules"
+
+
+# ── /wire: start_spoof must report the truth about the REDIRECT rule ─────────
+
+
+def test_start_spoof_returns_false_when_insert_fails(monkeypatch):
+    def _fake(cmd, *a, **k):
+        # -C says absent (rc=1), then -I also fails (rc=1) → rule NOT installed.
+        return _cp(1)
+
+    monkeypatch.setattr(dns_mod.subprocess, "run", _fake)
+    mgr = DnsSpoofManager()
+    assert mgr.start_spoof("10.0.0.5") is False
+    assert "10.0.0.5" not in mgr._spoof_map, "optimistic state must be rolled back"
+    assert mgr._running is False
+
+
+def test_start_spoof_returns_true_when_rule_added(monkeypatch):
+    results = iter([_cp(1), _cp(0)])  # -C absent, then -I succeeds
+
+    monkeypatch.setattr(dns_mod.subprocess, "run", lambda *a, **k: next(results, _cp(0)))
+    mgr = DnsSpoofManager()
+    assert mgr.start_spoof("10.0.0.5") is True
+    assert mgr._spoof_map.get("10.0.0.5") == "1.2.3.4"
