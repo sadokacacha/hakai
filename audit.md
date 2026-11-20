@@ -1629,6 +1629,37 @@ clean, `mypy .` clean (63 files), confirming the three files need no fix.
 
 ---
 
+## Verification — 2026-11-20 (Phase 8, P4-6 dashboard threading)
+
+Full gates after the P4-6 batch (dashboard engine toggles → off the Tk thread).
+
+### Quality gates (actual output)
+
+| Gate | Result | Evidence |
+|------|--------|----------|
+| `pytest -v` | **116 passed** in 0.39s (+1 async_util) | unit + mocked |
+| `ruff check .` | **All checks passed** | static |
+| `ruff format --check .` | 8 would reformat / 75 clean — all 8 **pre-existing WIP** (count 10→8 as the P4 batches landed); my 3 files → **already formatted** | static |
+| `mypy .` | **Success: no issues in 68 source files** | static |
+
+### Functional checks (actual output)
+
+| Check | Result | Evidence |
+|-------|--------|----------|
+| **Imports** | **32/32** modules import cleanly (+ netutil, osutil, async_util since baseline's 29) | integration (import-level), Linux, non-root |
+| **run_async offloads** | with `threading.Thread` patched, `run_async(f)` does **not** run `f` on the caller and schedules a **daemon** thread | unit (patched Thread) |
+| **toggles wired** | **6/6** dashboard engine toggles route through `run_async` (confirmed by `inspect.getsource`) | static/unit |
+| **Config migration** | unchanged (P4-4 removed the dead keys earlier; the 5 live keys still default) | unit |
+| **UI callbacks / shutdown** | log path thread-safe (DASH-1); toggles no longer block the Tk loop | mocked/unit |
+
+### Not verified (honest gaps)
+- No live Tk event loop is driven (no display), so the *actual* un-freezing is
+  verified by construction (the handlers call `run_async`) + the helper's unit
+  test, not by observing a real UI. The `protection_panel` modal residual (PP-1)
+  is unchanged and remains a documented follow-up. Manual GUI check still required.
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, P4-1 netutil consolidation)
 
 Full gates after the `core/netutil` consolidation (a behavior-preserving refactor
