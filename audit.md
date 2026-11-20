@@ -1237,6 +1237,63 @@ manual).
 
 ---
 
+### `system/network_manager.py` — RESOLVED (3 fixed) + 1 documented
+
+*Legitimate admin feature (static IP/DNS via nmcli), reachable from the
+Protection panel.*
+
+| ID | Sev | Location | Status |
+|----|-----|----------|--------|
+| NM-1 | Medium | `apply_static_config` | **Fixed** |
+| NM-2 | Medium | `apply_static_config` | **Fixed** |
+| NM-3 | Low | `set_dhcp` missing `which` guard | **Fixed** |
+| NM-6 | Low | Windows | Documented (honest, not fake) |
+
+**NM-1 — Unvalidated user input into privileged nmcli.** The protection panel
+collects `ip`/`gateway`/`dns` via free-text `simpledialog.askstring` and passes
+them straight to `nmcli connection modify … ipv4.*`. No validation. *Fix:*
+validate before any nmcli call — `ip` as a host-with-prefix
+(`ipaddress.ip_interface`, e.g. `192.168.1.50/24`), `gateway` as an IP, and each
+comma-separated `dns` entry as an IP; return `(False, msg)` on invalid input.
+*Regression:* `test_apply_rejects_invalid_ip` / `_gateway` / `_dns`.
+
+**NM-2 — No rollback → half-configured connection can drop the network.** The
+five `nmcli … modify … check=True` steps ran in sequence; a mid-sequence failure
+(e.g. the gateway step) left the connection in `ipv4.method manual` with a
+partial/invalid config and never brought it up — the host could **lose
+connectivity**. *Fix:* on any `CalledProcessError`/`OSError` in the sequence, log
+and **revert the connection to DHCP** (`ipv4.method auto` + `connection up`) to
+restore a working state, reporting `"…; reverted to DHCP"` (and a second message
+if even the revert fails). Also added `capture_output=True` so nmcli doesn't
+print to the console (no stray output from library code). *Regression:*
+`test_apply_reverts_to_dhcp_on_mid_sequence_failure`, `test_apply_accepts_valid_config`.
+
+**NM-3 — `set_dhcp` hardening.** Added the `shutil.which("nmcli")` guard (matching
+`apply_static_config`), a `conn_name` check, `capture_output`, and a narrowed
+`except (CalledProcessError, OSError)`.
+
+**NM-6 (documented) — Windows.** `apply_static_config` returns
+`(False, "nmcli not found")` via `shutil.which`; `set_dhcp` now does too. The
+module **errors honestly** on Windows rather than fake-succeeding.
+
+**Clean:** argument lists (no shell injection); `apply_static_config` already
+reported failure honestly (`check=True` → error) — the gap was the missing
+rollback, not false success.
+
+Verification (network_manager batch, per updated p2.md):
+per-file `ruff`/`mypy` on **src + test** — this caught an **RUF059** (unused
+unpacked `msg`) in the new test *before commit* (the `tests/*` ignore covers F841
+but not RUF059); fixed by using `_`. Then full gates — `pytest -v` → **96 passed**
+(+5); `ruff check .` → clean; `ruff format --check` my 2 files → clean;
+`mypy .` → no issues (57 files).
+
+**Limits (network_manager):** validation + the DHCP-revert control flow are proven
+against a mocked `subprocess` — no real nmcli reconfiguration is performed (root +
+NetworkManager + lab + manual). The revert targets DHCP, not necessarily the exact
+prior config (a documented best-effort recovery).
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, masquerade batch)
 
 Full gates after the `system/masquerade.py` batch. Passed pre-commit (p2.md);
