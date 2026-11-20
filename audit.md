@@ -1058,6 +1058,70 @@ not against live multicast mDNS traffic.
 
 ---
 
+### `system/stealth.py` — RESOLVED (2 fixed) + 3 documented
+
+*Evasion module. The cloak (`engage_mirage_cloak`) is left functionally
+unchanged (scope + AGENTS.md). Only `disengage_stealth` — which restores the
+REAL identity, the un-cloak/safe direction — is fixed.*
+
+| ID | Sev | Location | Status |
+|----|-----|----------|--------|
+| STEALTH-1 | Medium | `disengage_stealth` | **Fixed** |
+| STEALTH-2 | Medium | `disengage_stealth` | **Fixed** |
+| STEALTH-5 | Low | disengage doesn't reconnect wifi | Documented |
+| STEALTH-6 | Low | engage `sleep(1)` blocks caller | Documented (UI-layer) |
+| STEALTH-7 | Low | Windows false success | Documented (systemic) |
+
+**STEALTH-1 — Partial un-cloak on any failure.** `disengage_stealth` ran the
+hostname restore, the MAC restore, and the nft-table removal in **one** `try`
+with `check=True`. A failing `hostnamectl set-hostname` raised and skipped the
+MAC restore and firewall removal — leaving the host with the **spoofed MAC and
+the stealth-drop firewall still active** (which silently drops inbound traffic).
+Same partial-restoration class as CTL-1/NET-1. *Fix:* each step runs in isolation
+via a `_run()` helper that checks the return code and logs; one failure no longer
+blocks the others. *Regression:*
+`test_disengage_restores_mac_and_firewall_even_if_hostname_fails`.
+
+**STEALTH-2 — False success.** It returned `"[IDENTITY RESTORED]"`
+unconditionally (the except swallowed failures and fell through to the same
+return), so the controller/UI logged a successful un-cloak even when the MAC was
+still spoofed. *Fix:* return `"[IDENTITY RESTORED]"` only when the
+identity-critical restores (hostname + MAC) all succeeded, else
+`"[IDENTITY RESTORE INCOMPLETE]"`. The nft-table removal is best-effort (its
+absence — cloak never fully engaged — is not a failure). *Regression:*
+`test_disengage_reports_success_when_all_ok` (+ the INCOMPLETE assertion above).
+
+**STEALTH-5 (documented) — No wifi reconnect on disengage.** `engage` reconnects
+wifi after the MAC change (`nmcli dev wifi connect`), but `disengage` restores
+the MAC without reconnecting, so un-cloaking can leave wifi disassociated.
+Reconnecting needs the SSID (not captured at disengage) — a functional gap, not
+fixed here.
+
+**STEALTH-6 (documented, UI-layer) — Blocking caller.** `engage_mirage_cloak`'s
+`time.sleep(1)` plus the ip/nmcli/nft subprocesses run on whatever thread calls
+`toggle_stealth` — the protection panel calls it on the Tk thread, freezing the
+UI. The marshalling fix belongs in the UI layer (same family as CTL-3/PROT-2).
+
+**STEALTH-7 (documented, systemic) — Windows.** hostnamectl/ip/nmcli/nft are
+Linux-only; on Windows they fail into the caught except and the functions return
+their success strings regardless (false success) — the cross-platform class seen
+in IPT-win/ARP-5/DNS-6.
+
+**Not touched (scope):** `engage_mirage_cloak` — the MAC/hostname spoof + nft
+stealth-drop setup. Its steps are already isolated in separate try blocks; its
+"[CLOAKED AS …]" return is evasion feedback, deliberately left as-is.
+
+Verification (stealth batch, per updated p2.md):
+per-file `ruff`/`mypy` on **src + test**, then full gates — `pytest -v`
+→ **82 passed** (+2); `ruff check .` → clean; `ruff format --check` my 2 files →
+clean; `mypy .` → no issues (54 files).
+
+**Limits (stealth):** un-cloak restoration verified against a mocked
+`subprocess` (asserts each step is attempted and the status is truthful) — not
+that a real NIC's MAC/hostname/nft table actually revert (root + Linux + manual).
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, mdns batch)
 
 Full gates after the `network/mdns_sniff.py` batch. Passed pre-commit (p2.md);
