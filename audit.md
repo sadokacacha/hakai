@@ -1402,6 +1402,57 @@ applied (root + Linux + lab + manual).
 
 ---
 
+### `system/firewall_apex.py` — RESOLVED (1 fixed) + 2 clean/documented
+
+*GhostFirewall — nftables stealth-drop (defensive). Only the fail-safe behaviour
+is changed; the rule set is unchanged.*
+
+| ID | Sev | Location | Status |
+|----|-----|----------|--------|
+| FW-1 | Medium | `toggle_stealth` enable build | **Fixed** |
+| FW-2 | — | disable path | **Clean** |
+| FW-6 | Low | Windows | Documented (honest) |
+
+**FW-1 — Partial build locks the host out (fail-unsafe).** Enable creates the
+input chain with `policy drop` first, then adds `ct state established,related
+accept` and `iif lo accept` (each `check=True`). If a rule add failed mid-build,
+the old `except` returned `[ERROR: FIREWALL_FAIL]` but **left a drop-policy chain
+without the accept rules** — the host drops all inbound traffic (incl. its
+established connections), i.e. **locks itself out of its own network** — while
+`self.active` stayed False, so the UI wouldn't show it as on for the user to
+disable (the next toggle's leading `nft delete table` would be the only way out).
+*Fix:* wrap the build; on any `CalledProcessError`/`OSError`, **roll back** by
+deleting the half-built `hakai_stealth` table, set `active=False`, and return
+`[ERROR: FIREWALL_FAIL - build rolled back]`. Also set `active=False` on the
+outer error path, and `capture_output=True` so nft doesn't print from library
+code. *Regression:* `test_enable_rolls_back_half_built_table_on_failure`
+(asserts ≥2 `nft delete table` — the clean-slate one **and** the rollback),
+`test_enable_success_sets_active`, `test_disable_removes_table_and_clears_active`.
+
+**FW-2 (clean) — Disable.** The unconditional leading `nft delete table inet
+hakai_stealth` removes the table on disable (and before every enable), so the
+`else` branch correctly just clears `active`. The delete is **scoped to the
+hakai_stealth table** — it never flushes the host's other nftables rules.
+
+**FW-6 (documented) — Windows.** `nft` raising `FileNotFoundError` is caught and
+returns `[ERROR: …]` — honest, not fake success.
+
+**Not touched (scope):** the stealth-drop rule set (drop policy + established/lo
+accept) is unchanged — only the failure handling was made fail-safe.
+
+Verification (firewall_apex batch, per updated p2.md):
+per-file `ruff`/`mypy` on **src + test** (the test's fake-match condition was
+corrected during authoring — `"established,related"` is a substring of one rule
+arg, not a list element), then full gates — `pytest -v` → **104 passed** (+3);
+`ruff check .` → clean; `ruff format --check` my 2 files → clean; `mypy .` → no
+issues (60 files).
+
+**Limits (firewall_apex):** the rollback-on-failure control flow is proven
+against a mocked `subprocess` — no real nft table/chain/rule is created or
+removed (root + Linux + lab + manual).
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, masquerade batch)
 
 Full gates after the `system/masquerade.py` batch. Passed pre-commit (p2.md);
