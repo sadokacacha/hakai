@@ -11,23 +11,16 @@ Interface is auto-detected at init() time — no hardcoded 'eth0'.
 
 from __future__ import annotations
 
-import ipaddress
 import logging
 import shutil
 import subprocess
 import sys
 import threading
 
+from core.netutil import valid_ip
+
 _IS_WINDOWS = sys.platform == "win32"
 _log = logging.getLogger(__name__)
-
-
-def _valid_ip(addr: str) -> bool:
-    try:
-        ipaddress.ip_address(addr)
-    except ValueError:
-        return False
-    return True
 
 
 def _tc(iface: str, *args, capture=True):
@@ -114,7 +107,7 @@ class TCManager:
         """
         if not self._active:
             return False
-        if not _valid_ip(ip):
+        if not valid_ip(ip):
             _log.warning("tc: refusing to limit invalid IP %r", ip)
             return False
         with self._lock:

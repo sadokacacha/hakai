@@ -8,7 +8,6 @@ or simply block DNS entirely for a device.
 
 from __future__ import annotations
 
-import ipaddress
 import logging
 import subprocess
 import threading
@@ -16,15 +15,9 @@ import time
 
 from scapy.all import DNS, DNSRR, IP, UDP, send
 
+from core.netutil import valid_ip
+
 _log = logging.getLogger(__name__)
-
-
-def _valid_ip(addr: str) -> bool:
-    try:
-        ipaddress.ip_address(addr)
-    except ValueError:
-        return False
-    return True
 
 
 class DnsSpoofManager:
@@ -51,7 +44,7 @@ class DnsSpoofManager:
 
     def start_spoof(self, target_ip: str, redirect_to: str = "1.2.3.4") -> bool:
         """Intercept and redirect DNS for target_ip."""
-        if not _valid_ip(target_ip):
+        if not valid_ip(target_ip):
             _log.warning("dns_spoof: invalid target ip %r", target_ip)
             return False
 

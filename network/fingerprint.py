@@ -5,24 +5,17 @@ Runs in a background daemon thread, calls back with results.
 
 from __future__ import annotations
 
-import ipaddress
 import logging
 import re
 import shutil
 import subprocess
 import threading
 
+from core.netutil import valid_ip
+
 _log = logging.getLogger(__name__)
 
 COMMON_PORTS = "21,22,23,25,53,80,110,135,139,143,443,445,3389,5900,8080,8443,1883,5432,3306"
-
-
-def _valid_ip(addr: str) -> bool:
-    try:
-        ipaddress.ip_address(addr)
-    except ValueError:
-        return False
-    return True
 
 
 def _parse_nmap(stdout: str) -> tuple[list[int], str, dict[int, str]]:
@@ -62,7 +55,7 @@ def fingerprint_device(ip: str, callback):
     Background nmap OS+service detection.
     callback(open_ports: list[int], os_guess: str, services: dict[int, str])
     """
-    if not _valid_ip(ip):
+    if not valid_ip(ip):
         _log.warning("fingerprint: refusing to scan invalid IP %r", ip)
         callback([], "", {})
         return

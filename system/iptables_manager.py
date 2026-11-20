@@ -9,21 +9,14 @@ by the app — network/arp.py applies its own FORWARD DROP. See audit.md IPT/ARP
 
 from __future__ import annotations
 
-import ipaddress
 import logging
 import subprocess
 import sys
 
+from core.netutil import valid_ip
+
 _IS_WINDOWS = sys.platform == "win32"
 _log = logging.getLogger(__name__)
-
-
-def _valid_ip(addr: str) -> bool:
-    try:
-        ipaddress.ip_address(addr)
-    except ValueError:
-        return False
-    return True
 
 
 def _ipt(*args, capture=True):
@@ -58,7 +51,7 @@ class IPTManager:
         newly added). The IP is tracked for cleanup even on partial failure, so
         any rule that *was* added still gets removed later.
         """
-        if not _valid_ip(ip):
+        if not valid_ip(ip):
             return False
         if ip in self._accounting:
             return True
@@ -91,7 +84,7 @@ class IPTManager:
     def add_drop(self, ip: str) -> bool:
         """Insert kernel-level FORWARD DROP rules — device instantly loses
         internet. Returns True if both rules are present after the call."""
-        if not _valid_ip(ip):
+        if not valid_ip(ip):
             return False
         ok = True
         for flag in ("-s", "-d"):

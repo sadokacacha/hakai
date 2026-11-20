@@ -2,34 +2,13 @@
 system/network_manager.py — Static IP & DNS config via nmcli.
 """
 
-import ipaddress
 import logging
 import shutil
 import subprocess
 
+from core.netutil import valid_cidr, valid_dns, valid_ip
+
 _log = logging.getLogger(__name__)
-
-
-def _valid_cidr(addr: str) -> bool:
-    """Accepts a host address with or without a prefix (e.g. 192.168.1.50/24)."""
-    try:
-        ipaddress.ip_interface(addr)
-    except ValueError:
-        return False
-    return True
-
-
-def _valid_ip(addr: str) -> bool:
-    try:
-        ipaddress.ip_address(addr)
-    except ValueError:
-        return False
-    return True
-
-
-def _valid_dns(dns: str) -> bool:
-    parts = [p.strip() for p in dns.split(",") if p.strip()]
-    return bool(parts) and all(_valid_ip(p) for p in parts)
 
 
 def get_connections() -> list[str]:
@@ -61,11 +40,11 @@ def apply_static_config(conn_name: str, ip: str, gateway: str, dns: str = "8.8.8
     if not conn_name:
         return False, "no connection selected"
     # Validate the user-typed values before they reach privileged nmcli.
-    if not _valid_cidr(ip):
+    if not valid_cidr(ip):
         return False, f"invalid IP/prefix: {ip!r}"
-    if not _valid_ip(gateway):
+    if not valid_ip(gateway):
         return False, f"invalid gateway: {gateway!r}"
-    if not _valid_dns(dns):
+    if not valid_dns(dns):
         return False, f"invalid DNS: {dns!r}"
 
     try:

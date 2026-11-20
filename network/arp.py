@@ -13,7 +13,6 @@ to flush poisoned caches — the old version's restore_all() was literally `pass
 
 from __future__ import annotations
 
-import ipaddress
 import os
 import re
 import shutil
@@ -24,6 +23,8 @@ import sys
 import threading
 import time
 
+from core.netutil import valid_ip
+
 _IS_WINDOWS = sys.platform == "win32"
 
 try:
@@ -32,16 +33,6 @@ try:
     SCAPY_OK = True
 except ImportError:
     SCAPY_OK = False
-
-
-def _valid_ip(addr: str) -> bool:
-    """True if addr is a valid IP literal. Network-facing values are validated
-    before they reach iptables / arpspoof / ping, all of which run as root."""
-    try:
-        ipaddress.ip_address(addr)
-    except ValueError:
-        return False
-    return True
 
 
 class ArpManager:
@@ -67,7 +58,7 @@ class ArpManager:
 
     def cut(self, ip: str, gateway: str, iface: str, my_ip: str) -> bool:
         """Apply a persistent cut using all 5 layers."""
-        if not _valid_ip(ip) or not _valid_ip(gateway):
+        if not valid_ip(ip) or not valid_ip(gateway):
             return False
         # L1: kernel DROP
         self._apply_drop(ip)
@@ -76,7 +67,7 @@ class ArpManager:
 
     def spoof(self, ip: str, gateway: str, iface: str, my_ip: str, mode: str = "spoof") -> bool:
         """Poison the ARP cache to intercept traffic without dropping it (Monitoring)."""
-        if not _valid_ip(ip) or not _valid_ip(gateway):
+        if not valid_ip(ip) or not valid_ip(gateway):
             return False
         target_mac, gw_mac, my_mac = self._resolve_macs(ip, gateway, iface)
 

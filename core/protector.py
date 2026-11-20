@@ -3,7 +3,6 @@ core/protector.py — Defensive engine for Hakai.
 Protects the attacker from being spoofed or tracked.
 """
 
-import ipaddress
 import logging
 import subprocess
 import sys
@@ -12,16 +11,10 @@ import time
 
 from scapy.all import ARP, sniff
 
+from core.netutil import valid_ip
+
 _IS_WINDOWS = sys.platform == "win32"
 _log = logging.getLogger(__name__)
-
-
-def _valid_ip(addr: str) -> bool:
-    try:
-        ipaddress.ip_address(addr)
-    except ValueError:
-        return False
-    return True
 
 
 class Protector:
@@ -104,7 +97,7 @@ class Protector:
         """Lock the gateway MAC in the ARP table."""
         if not self.net.gateway:
             return False
-        if not _valid_ip(self.net.gateway):
+        if not valid_ip(self.net.gateway):
             if log:
                 log("✕ ARP Guard: invalid gateway address", "err")
             return False

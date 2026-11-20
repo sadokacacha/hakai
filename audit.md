@@ -1981,6 +1981,102 @@ This is exactly the kind of slip p8 exists to catch.
 
 ---
 
+## Architecture Verdict — 2026-11-20 (Phase 4)
+
+Assessed against the p1 map and everything the bug hunt surfaced. The guiding
+rule: **propose only changes with a named problem; no abstraction without a
+concrete problem it solves.** One change is implemented this phase; the rest are
+named proposals with a recommended owner/phase.
+
+### Overall shape (verdict: sound for this size — keep)
+
+`main` → `Controller` (the engine/orchestrator) → ~12 subsystems; `Dashboard`
+(UI) talks to the controller by method calls + a `log=` callback + the
+`on_protection_alert` hook. Layering is **core ← network ← system** with the
+controller on top wiring everything. **No import cycles** (all `__init__.py` are
+empty; `core.netutil` is a new leaf). The Controller is a large god-object but
+that is acceptable for an app of this size — it is not worth a service-layer
+abstraction (no concrete problem it would solve). **Keep the architecture.**
+
+### IMPLEMENTED — P4-1: de-duplicate IP validation into `core/netutil.py`
+
+**Problem (named, evidenced):** the identical helper `_valid_ip` was copy-pasted
+in **7** modules (`network/arp`, `system/iptables_manager`, `core/protector`,
+`system/tc_manager`, `network/dns_spoof`, `network/fingerprint`,
+`system/network_manager`), plus `_valid_cidr`/`_valid_dns` in a 8th place — ten
+validation sites with drift risk (some used `ip_address`, nm used `ip_interface`
+and a comma-split DNS check). This grew directly out of the Phase-2 fixes that
+added validation everywhere.
+**Change:** new `core/netutil.py` (`valid_ip`, `valid_cidr`, `valid_dns`) — a
+dependency leaf (imports only `ipaddress`), so any layer can import it with no
+cycle. All 7 modules now `from core.netutil import …`; the 7 local defs and their
+now-unused `import ipaddress` are gone. Behaviour is preserved (the existing
+per-module validation tests — arp/iptables/tc/dns_spoof/fingerprint/protector/
+network_manager — all still pass unchanged), plus a new `tests/test_netutil.py`.
+*Verification:* `pytest` **117 passed** (+3), `ruff check .` clean, `mypy .`
+clean (65 files), 30/30 modules import.
+*(Note: a first attempt with `sed` range-deletion over-matched and truncated four
+files; caught immediately via `wc -l` vs HEAD, reverted cleanly from the
+per-batch commits, and redone with exact-string replacement — a concrete payoff
+of committing every batch.)*
+
+### PROPOSED (named problems, not yet implemented)
+
+**P4-2 — Collapse the 4-way OUI lookup (INVESTIGATE→REMOVE one path).**
+*Problem:* vendor lookup exists twice — `core/persistence` (`_OUI_DB` static dict
++ `lookup_oui` via optional `mac_vendor_lookup`) **and** `network/oui_lookup`
+(`FALLBACK_OUI` static dict + `get_vendor` via optional `ouilookup`). Two static
+dicts, two optional libraries, two entry points; callers pick inconsistently
+(`scanner` uses `lookup_oui`, controller intel callbacks use `get_vendor`).
+*Fix:* keep one module (recommend `persistence.lookup_oui` as canonical, merge
+the two dicts, drop one optional lib), route all callers through it. Medium
+effort, touches classification; own as a dedicated batch. Grep first to prove the
+removed path has no remaining refs.
+
+**P4-3 — Remove dead code.** *Problem:* carrying unreachable code that confuses
+maintenance. (a) `IPTManager.add_drop/remove_drop/is_dropped/_dropped` — the
+DROP half is unreferenced by the app (`network/arp` owns cuts); note it is
+covered by `test_iptables_manager::test_drop_bookkeeping`, so removal must drop
+that test too. (b) `deauth._enable_monitor` — zero callers. (c) the MDNS-5 TXT
+branch (dead because scapy TXT rdata is a list). *Fix:* delete with a grep proof
+per item; low risk. Deferred only to keep P4-1 cohesive.
+
+**P4-4 — Config keys defined but never consumed.** *Problem:* `DEFAULT_CFG` in
+`persistence` defines `arp_interval`/`watchdog_interval`, but `network/arp`
+hardcodes `ARP_INTERVAL`/`WATCHDOG_INTERVAL` as class constants and never reads
+the config — the knobs are dead. *Fix:* either wire `arp` to read them from `db`
+(makes the config real) or drop the keys. Low effort.
+
+**P4-5 — Platform boundary is scattered and inconsistent (the biggest latent
+issue).** *Problem:* `_IS_WINDOWS` branches are duplicated across ~10 modules
+with **three** different behaviours on Windows: silent fake-success
+(`iptables_manager`, `tc_manager`), explicit error (`masquerade`, `chameleon`,
+`firewall_apex`, `network_manager`), and would-crash-but-caught-upstream
+(`arp`'s unguarded iptables). This is the IPT-win/TC-win/ARP-5/DNS-6 cluster.
+*Fix:* a small `platform`/capability shim that answers "is the Linux engine
+available?" once and makes unsupported operations **explicitly, uniformly**
+unsupported (AGENTS.md: "Windows paths must not silently no-op"). Medium effort;
+the right place to finally resolve the systemic Windows inconsistency. Recommend
+its own phase.
+
+**P4-6 — UI work on the Tk thread (tracked from Phase 2).** `ui/protection_panel`
+toggles + `controller` evasion toggles run subprocesses synchronously on the Tk
+thread (PP-1/DASH-2/STEALTH-6). *Fix:* offload handlers to worker threads and
+marshal widget-state refresh back via `after` (the log path is already
+thread-safe after DASH-1). A focused UI-threading batch.
+
+### Not changed (deliberately)
+
+- **Shared global singletons** (`persistence.db`, scanner module-level caches/
+  pools, `_ORIG`/`_ORIG_MTU`) are app-wide state with a clear owner; converting
+  them to injected objects solves no concrete problem here. Keep. (The one real
+  issue — scanner's never-`shutdown()` thread pools, SCAN-4 — is a resource note,
+  not an architecture change.)
+- **Error propagation** is now consistent after Phase 2 (log + return bool/status,
+  isolated cleanup) — no change needed.
+
+---
+
 ## Tool & Dependency Tribunal — 2026-11-19 (Phase 3)
 
 Matrix only — no dependency or config changes made in this phase. Evidence is
