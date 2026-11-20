@@ -14,7 +14,7 @@ Mocked: scapy sendp is patched; no real packets, no threads started.
 
 from __future__ import annotations
 
-from scapy.all import ICMPv6ND_RA
+from scapy.all import ICMPv6ND_RA  # type: ignore[attr-defined]  # scapy.all exposes layers dynamically
 
 from network import ipv6 as ipv6_mod
 from network.ipv6 import IPv6Hijacker

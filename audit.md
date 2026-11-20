@@ -904,6 +904,44 @@ route — that needs a root Linux host + an IPv6 lab, unavailable here.
 
 ---
 
+## Verification — 2026-11-20 (Phase 8, ipv6 batch)
+
+Full gates after the `network/ipv6.py` batch. Labelled by evidence type. **A
+green mock proves control flow, not real IPv6/kernel behaviour.**
+
+### Quality gates (actual output)
+
+| Gate | Result | Evidence |
+|------|--------|----------|
+| `pytest -v` | **70 passed** in 0.72s | unit + mocked |
+| `ruff check .` | **All checks passed** | static |
+| `ruff format --check .` | 23 would reformat / 42 clean — the 23 are the **pre-existing uncommitted WIP**; **all 23 .py files across my commits are format-clean** | static |
+| `mypy .` | **Success: no issues in 50 source files** (after fixing one attr-defined — below) | static |
+
+**mypy caught by this phase (real miss, 2nd occurrence).** `tests/test_ipv6.py`
+was committed (ipv6 batch) with `from scapy.all import ICMPv6ND_RA`, which trips
+`attr-defined` because the mypy override that silences scapy's dynamic symbols
+covers `network.*` but not `tests/*`; my per-file `mypy network/ipv6.py` didn't
+check the test. Fixed with a targeted `# type: ignore[attr-defined]`. (Same slip
+class as the scanner batch's I001 — per-file checks miss newly-added test files;
+`/p8`'s full `mypy .` / `ruff check .` is what catches them.)
+
+### Functional checks (actual output)
+
+| Check | Result | Evidence |
+|-------|--------|----------|
+| **Imports** | **29/29** modules import cleanly | integration (import-level), Linux, non-root |
+| **Shutdown / cleanup** | `IPv6Hijacker.stop()` (when running) sends a withdrawal RA with **routerlifetime=0** — verified live via a patched `sendp`; `Controller.stop()` always reaches `restore_network` once (test_controller_stop) | **mocked/unit** — real target route-drop is **root-required + IPv6 lab + manual** |
+| **Config migration** | unchanged this batch (missing keys fall back to `DEFAULT_CFG`) | unit |
+| **UI callbacks** | unchanged this batch (wiring test passes) | static/mocked; live Tk = **manual** |
+
+### Not verified (honest gaps)
+- The withdrawal RA's **effect** (a real host dropping the bogus route) is
+  unverified — needs root + an IPv6 lab.
+- No live packets/kernel/GUI; engine evidence is mocked/static throughout.
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, scanner batch)
 
 Full gates run after the `network/scanner.py` batch. Every result is labelled by
