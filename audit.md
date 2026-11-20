@@ -1629,6 +1629,26 @@ clean, `mypy .` clean (63 files), confirming the three files need no fix.
 
 ---
 
+## Verification — 2026-11-20 (Phase 8, tribunal re-verification)
+
+The last batch was **docs-only** — the Phase-3 tribunal re-verification note; `git
+show --stat HEAD` confirms only `audit.md` changed (1 file, +27). So the gates can
+only confirm nothing regressed, which they do.
+
+| Gate | Result | Evidence |
+|------|--------|----------|
+| `pytest -v` | **114 passed** in 0.47s | unit + mocked |
+| `ruff check .` | **All checks passed** | static |
+| `ruff format --check .` | 10 would reformat / 68 clean — all **pre-existing WIP**, unchanged | static |
+| `mypy .` | **Success: no issues in 63 source files** | static |
+| Imports | **29/29** modules import cleanly | integration (import-level), Linux, non-root |
+
+No code changed → no startup/shutdown/config/UI/cleanup behaviour to re-verify
+beyond the unregressed suite. (Nothing here exercises a real kernel/network/GUI;
+that remains root/lab/manual, as throughout Phase 8.)
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, sweep: oui_lookup/device/limit_dialog/protection_panel)
 
 Full gates after the 4-file review (no code changed — this confirms the three
