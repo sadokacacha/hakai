@@ -856,6 +856,54 @@ function/mocked-`urlopen` tests; live SSDP/nmap/ARP scanning is not exercised.
 
 ---
 
+### `network/ipv6.py` — RESOLVED (1 fixed) + 3 documented
+
+*Offensive module — the fix is restoration/collateral-reduction, not hijack
+effectiveness (per session scope).*
+
+| ID | Sev | Location | Status |
+|----|-----|----------|--------|
+| IPV6-1 | Medium | `stop()` | **Fixed** |
+| IPV6-5 | Low | `_dhcp_sniff._cb` | Documented |
+| IPV6-7 | Low | unguarded scapy import | Documented |
+| IPV6-6 | Low | no Windows/iface awareness | Documented |
+
+**IPV6-1 — No route withdrawal on stop (network-state drift).** `_ra_loop`
+advertises the host as the default IPv6 router with `routerlifetime=1800` to
+`ff02::1` (all nodes), but `stop()` only set `_running=False`. Targets therefore
+keep the **bogus default route for up to 30 minutes** after the operator stops —
+the IPv6 equivalent of the ARP restore gap (NET-1/ARP-1), and the codebase
+already does the analogous cleanup in `arp._send_restore`. *Fix:* `stop()` now
+calls `_withdraw_ra()` (only if it was running), sending a `routerlifetime=0` RA
+with a zero-lifetime prefix so targets drop the route immediately. *Regression:*
+`test_stop_sends_withdrawal_ra` (asserts `routerlifetime == 0`),
+`test_stop_when_not_running_sends_nothing`.
+
+**IPV6-5 (documented) — Sniffer teardown on a malformed packet.**
+`_dhcp_sniff._cb` reads `pkt[Ether].src` / `pkt[IPv6].src` outside its try; a
+Solicit without an Ether/IPv6 layer raises out of the callback, which the outer
+loop catches and restarts (losing ≤10 s of sniffing). Self-healing, low impact.
+
+**IPV6-7 (documented) — Unguarded scapy import.** Unlike `arp`/`traffic`,
+`ipv6.py` imports scapy at module top with no `SCAPY_OK` fallback; a missing
+scapy would fail the whole app's import. Acceptable since scapy is a required
+dependency, noted for consistency.
+
+**Clean:** no subprocess / iptables / address-to-command concerns (pure scapy,
+static documentation prefix `2001:db8:1::` and `fe80::1`); `start()`/`stop()`
+are idempotent; threads are daemon.
+
+Verification (ipv6 batch):
+`pytest -q` → **70 passed** (+2) · `ruff check` / `ruff format` on changed
+files → clean · `mypy network/ipv6.py` → clean. (`ruff format` normalized the
+whole file, which was in the pre-existing unformatted WIP.)
+
+**Limits (ipv6):** the withdrawal RA is verified with a mocked `sendp` (asserts
+the packet shape); it is **not** verified that a real target actually drops the
+route — that needs a root Linux host + an IPv6 lab, unavailable here.
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, scanner batch)
 
 Full gates run after the `network/scanner.py` batch. Every result is labelled by
