@@ -1629,6 +1629,38 @@ clean, `mypy .` clean (63 files), confirming the three files need no fix.
 
 ---
 
+## Verification — 2026-11-20 (Phase 8, P4-1 netutil consolidation)
+
+Full gates after the `core/netutil` consolidation (a behavior-preserving refactor
+across 7 modules). Extra scrutiny because an interim `sed` attempt had truncated
+files — so this pass **functionally** confirms the consolidated validation is
+wired correctly in every consumer, not just that they import.
+
+### Quality gates (actual output)
+
+| Gate | Result | Evidence |
+|------|--------|----------|
+| `pytest -v` | **117 passed** in 0.46s (+3 netutil; all 7 modules' existing validation tests still pass) | unit + mocked |
+| `ruff check .` | **All checks passed** | static |
+| `ruff format --check .` | 10 would reformat / 70 clean — all 10 **pre-existing WIP**; my 9 batch files → **already formatted** | static |
+| `mypy .` | **Success: no issues in 65 source files** (+ `core/netutil`) | static |
+
+### Functional checks (actual output)
+
+| Check | Result | Evidence |
+|-------|--------|----------|
+| **Imports** | **30/30** modules import cleanly (+ `core/netutil`) | integration (import-level), Linux, non-root |
+| **Consolidated validation wired** | `arp.cut("not-an-ip",…)` → False, **0** commands issued; `IPTManager.add_accounting("not-an-ip")` → False; `tc.limit("not-an-ip",…)` → False (logs "refusing to limit"); `apply_static_config("garbage",…)` → False | unit/mocked — proves `core.netutil.valid_ip`/`valid_cidr` are correctly imported and called in each consumer |
+| **Behaviour preserved** | every per-module validation test (arp/iptables/tc/dns_spoof/fingerprint/protector/network_manager) passes unchanged | unit |
+| **Config / shutdown / UI** | unchanged this batch | — |
+
+### Not verified (honest gaps)
+- `core.netutil` is pure stdlib `ipaddress` — fully unit-covered; no kernel/network
+  involved. The wiring check uses mocked subprocess, so it proves the *validation
+  short-circuit* (reject-before-command), not real command behaviour.
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, tribunal re-verification)
 
 The last batch was **docs-only** — the Phase-3 tribunal re-verification note; `git
