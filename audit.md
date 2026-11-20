@@ -1012,6 +1012,40 @@ packet drop is exercised (needs root + BCC/clang + kernel headers + a lab NIC).
 
 ---
 
+## Verification — 2026-11-20 (Phase 8, xdp batch)
+
+Full gates after the `network/xdp_engine.py` batch. Passed the full gates
+**before commit** (updated p2.md); p8 confirms and found nothing new.
+
+### Quality gates (actual output)
+
+| Gate | Result | Evidence |
+|------|--------|----------|
+| `pytest -v` | **78 passed** in 0.35s (5 new xdp) | unit + mocked (fake BPF, no kernel) |
+| `ruff check .` | **All checks passed** | static |
+| `ruff format --check .` | 21 would reformat / 46 clean — the 21 are **pre-existing WIP**; `ruff format --check network/xdp_engine.py tests/test_xdp_engine.py` → **2 already formatted** | static |
+| `mypy .` | **Success: no issues in 52 source files** | static |
+
+(The pre-existing WIP "would reformat" count keeps dropping — 24→23→22→21 — as
+each batch brings one more previously-unformatted file to clean.)
+
+### Functional checks (actual output)
+
+| Check | Result | Evidence |
+|-------|--------|----------|
+| **Imports** | **29/29** modules import cleanly | integration (import-level), Linux, non-root |
+| **Shutdown / cleanup** | `unload()` with a raising `remove_xdp` → `_loaded=False`, `_bpf=None`, logs "program may remain attached", 2nd `unload()` is a no-op; `add_drop("1.2.3")` → logs "refusing to drop invalid IPv4", map unchanged; `add_drop("192.168.1.5")` → 4-byte network-order key present | **mocked/unit** — real eBPF attach/detach + packet drop is **root-required + BCC/clang + lab-NIC + manual** |
+| **Config migration** | unchanged this batch (missing keys → `DEFAULT_CFG`) | unit |
+| **UI callbacks** | unchanged this batch | static/mocked; live Tk = **manual** |
+
+### Not verified (honest gaps)
+- No real XDP program is loaded/attached and no packet is dropped — the fixed
+  behaviour is the **cleanup state machine and key validation**, verified against
+  a fake BPF object.
+- No live packets/kernel/GUI anywhere; engine evidence is mocked/static.
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, deauth batch)
 
 Full gates after the `network/deauth.py` batch. This batch already passed the
