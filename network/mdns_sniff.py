@@ -6,6 +6,7 @@ Covers Apple, Google, Microsoft, Amazon, Sonos, Roku, smart-home and
 Linux Avahi announcements so most modern devices get identified without
 needing a full port scan.
 """
+
 from __future__ import annotations
 
 from scapy.all import DNS, IP
@@ -15,62 +16,53 @@ from core.persistence import sanitize_mdns_name as _sanitize
 # Maps service-type substrings to human-readable OS/class labels
 _SERVICE_MAP = [
     # Apple ecosystem
-    ("_apple-mobdev2",   "iPhone/iOS"),
-    ("_apple-mobdev",    "iPhone/iOS"),
-    ("_googlecast",      "Chromecast/Google"),
+    ("_apple-mobdev2", "iPhone/iOS"),
+    ("_apple-mobdev", "iPhone/iOS"),
+    ("_googlecast", "Chromecast/Google"),
     ("_spotify-connect", "Spotify Device"),
-    ("_homekit",         "HomeKit/Apple"),
-    ("_smb",             "macOS / Samba"),
-    ("_afp",             "macOS"),
-    ("_ssh._tcp",        "macOS / Linux SSH"),
-    ("_rdp",             "Windows RDP"),
-
+    ("_homekit", "HomeKit/Apple"),
+    ("_smb", "macOS / Samba"),
+    ("_afp", "macOS"),
+    ("_ssh._tcp", "macOS / Linux SSH"),
+    ("_rdp", "Windows RDP"),
     # Google / Android
-    ("_googlecast",      "Chromecast / Google TV"),
-    ("_googlerpc",       "Android / Google"),
+    ("_googlecast", "Chromecast / Google TV"),
+    ("_googlerpc", "Android / Google"),
     ("_androidtvremote", "Android TV"),
-    ("_googlezone",      "Google Nest Hub"),
-
+    ("_googlezone", "Google Nest Hub"),
     # Amazon
-    ("_amzn-wplay",      "Amazon Echo / Fire TV"),
-    ("_amazon",          "Amazon Device"),
-
+    ("_amzn-wplay", "Amazon Echo / Fire TV"),
+    ("_amazon", "Amazon Device"),
     # Sonos
-    ("_sonos",           "Sonos Speaker"),
-
+    ("_sonos", "Sonos Speaker"),
     # Roku
-    ("_roku",            "Roku Device"),
-
+    ("_roku", "Roku Device"),
     # Microsoft / Windows
-    ("_smb._tcp",        "Windows / Samba"),
-    ("_microsoft-ds",    "Windows"),
-    ("_nvstream",        "NVIDIA Shield / GeForce"),
-
+    ("_smb._tcp", "Windows / Samba"),
+    ("_microsoft-ds", "Windows"),
+    ("_nvstream", "NVIDIA Shield / GeForce"),
     # Printers
-    ("_ipp",             "Printer (IPP)"),
-    ("_pdl-datastream",  "Printer (HP JetDirect)"),
-    ("_printer",         "Printer"),
-
+    ("_ipp", "Printer (IPP)"),
+    ("_pdl-datastream", "Printer (HP JetDirect)"),
+    ("_printer", "Printer"),
     # NAS / servers
-    ("_nfs",             "NAS / Linux Server"),
-    ("_ftp",             "FTP Server"),
-    ("_http._tcp",       "Web Server / IoT"),
-
+    ("_nfs", "NAS / Linux Server"),
+    ("_ftp", "FTP Server"),
+    ("_http._tcp", "Web Server / IoT"),
     # Smart home / IoT
-    ("_hap",             "HomeKit Accessory"),
-    ("_matter",          "Matter IoT Device"),
-    ("_miio",            "Xiaomi Mi Device"),
-    ("_tuya",            "Tuya Smart Plug/Bulb"),
-    ("_philipshue",      "Philips Hue"),
-    ("_elg",             "Elgato Device"),
-    ("_espressif",       "ESP8266/ESP32 IoT"),
-    ("_wyze",            "Wyze Camera"),
-    ("_lg",              "LG Smart TV"),
-    ("_samsung",         "Samsung Smart TV"),
-
+    ("_hap", "HomeKit Accessory"),
+    ("_matter", "Matter IoT Device"),
+    ("_miio", "Xiaomi Mi Device"),
+    ("_tuya", "Tuya Smart Plug/Bulb"),
+    ("_philipshue", "Philips Hue"),
+    ("_elg", "Elgato Device"),
+    ("_espressif", "ESP8266/ESP32 IoT"),
+    ("_wyze", "Wyze Camera"),
+    ("_lg", "LG Smart TV"),
+    ("_samsung", "Samsung Smart TV"),
     # Generic
-    ("_workstation",     "Linux Workstation (Avahi)"),
-    ("_device-info",     "Apple / Generic Device"),
+    ("_workstation", "Linux Workstation (Avahi)"),
+    ("_device-info", "Apple / Generic Device"),
 ]
 
 
@@ -91,9 +83,14 @@ def sniff_mdns_name(pkt, callback):
     dns = pkt.getlayer(DNS)
 
     # ── Scan question records (QD) ──────────────────────────────────────────
-    for i in range((dns.qdcount or 0) if dns.qd else 0):
+    # Iterate the actual dissected records, not range(dns.qdcount): the qdcount
+    # header is attacker-influenced — an inflated value wastes thousands of
+    # IndexError iterations per packet, and a value that under-reports the
+    # carried records silently drops them.
+    qd_records = dns.qd if isinstance(dns.qd, list) else ([dns.qd] if dns.qd else [])
+    for q in qd_records:
         try:
-            qname_raw = dns.qd[i].qname.decode(errors="ignore").rstrip(".")
+            qname_raw = q.qname.decode(errors="ignore").rstrip(".")
             qname = qname_raw.lower()
 
             # 1. Extract hostname from  <name>.local queries

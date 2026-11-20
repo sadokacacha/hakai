@@ -1012,6 +1012,52 @@ packet drop is exercised (needs root + BCC/clang + kernel headers + a lab NIC).
 
 ---
 
+### `network/mdns_sniff.py` — RESOLVED (1 fixed) + 2 documented
+
+*Passive mDNS parser (no subprocess/threads/state). Empirically verified scapy
+2.8 behaviour before asserting: `dns.qd` is a list, TXT `rdata` is a list.*
+
+| ID | Sev | Location | Status |
+|----|-----|----------|--------|
+| MDNS-4 | Low-Med | QD loop | **Fixed** |
+| MDNS-1 | Low | `pkt[IP]` only | Documented |
+| MDNS-5 | Low | TXT `rdata` detection dead | Documented |
+
+**MDNS-4 — QD loop trusts the attacker-influenced `qdcount` header.** The loop
+ran `for i in range(dns.qdcount)` and indexed `dns.qd[i]`. `dns.qd` is the
+dissected record **list**, so: (a) an inflated `qdcount` (up to 65535) wastes
+thousands of caught `IndexError`s per packet (~0.4 s measured for 65535) — a
+minor LAN DoS on the sniffer thread; (b) a `qdcount` that **under-reports** the
+carried records silently drops them. *Fix:* iterate the actual `dns.qd` list
+(normalised to a list) instead of `range(qdcount)`. *Regression:*
+`test_qd_iterates_actual_records_not_qdcount` (a packet with `qdcount=1` but two
+questions — old code parsed only one), `test_inflated_qdcount_parses_without_error`.
+
+**MDNS-1 (documented) — IPv4-only.** `ip = pkt[IP].src if haslayer(IP) else
+None`, so mDNS over IPv6 (`ff02::fb`) is dropped. The sibling passive sniffer in
+`scanner.py` reads both. Not expanded — reading the IPv6 source would broaden
+recon attribution (an effectiveness change), left as a documented scope gap.
+
+**MDNS-5 (documented) — Dead TXT model detection.** The `model=iphone/appletv/
+macbook` TXT check is guarded by `isinstance(rdata, bytes)`, but scapy TXT
+`rdata` is a **list**, so the branch never runs. Making it work is a recon-
+accuracy improvement (out of scope); documented as latent dead code.
+
+**Clean:** no subprocess/iptables/threads/address-to-command here; the answer-
+record loop already walks the real record chain (bounded) and is exception-
+guarded; callback exceptions are contained per record.
+
+Verification (mdns batch, per updated p2.md):
+per-file `ruff`/`mypy` on **src + test** (scapy import uses a targeted
+`# type: ignore[attr-defined]`, justified by scapy's dynamic `scapy.all`), then
+full gates — `pytest -v` → **80 passed** (+2); `ruff check .` → clean;
+`ruff format --check` my 2 files → clean; `mypy .` → no issues (53 files).
+
+**Limits (mdns):** verified with hand-built scapy packets exercising the parse —
+not against live multicast mDNS traffic.
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, xdp batch)
 
 Full gates after the `network/xdp_engine.py` batch. Passed the full gates
