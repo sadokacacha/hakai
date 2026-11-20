@@ -1453,6 +1453,36 @@ removed (root + Linux + lab + manual).
 
 ---
 
+## Verification — 2026-11-20 (Phase 8, firewall_apex batch)
+
+Full gates after the `system/firewall_apex.py` batch. Passed pre-commit (p2.md);
+p8 confirms, nothing new.
+
+### Quality gates (actual output)
+
+| Gate | Result | Evidence |
+|------|--------|----------|
+| `pytest -v` | **104 passed** in 0.40s (3 new firewall) | unit + mocked (patched subprocess) |
+| `ruff check .` | **All checks passed** | static |
+| `ruff format --check .` | 13 would reformat / 62 clean — all 13 **pre-existing WIP** (count 17→13 as the system batches landed); my 2 files → **already formatted** | static |
+| `mypy .` | **Success: no issues in 60 source files** | static |
+
+### Functional checks (actual output)
+
+| Check | Result | Evidence |
+|-------|--------|----------|
+| **Imports** | **29/29** modules import cleanly | integration (import-level), Linux, non-root |
+| **Fail-safe / cleanup** | partial build (rule add fails) → `active=False`, `[ERROR: FIREWALL_FAIL - build rolled back]`, **2** `nft delete table` (clean-slate + rollback); success → `active=True`, `[SHIELDS: LOCKED]`; disable → `active=False`, table deleted, `[SHIELDS: DISENGAGED]` | **mocked/unit** — real nft table/chain/rule creation is **root-required + Linux + lab + manual** |
+| **Shutdown / config / UI** | unchanged this batch | — |
+
+### Not verified (honest gaps)
+- No real nftables ruleset is created, dropped, or rolled back — the verified
+  behaviour is the **fail-safe control flow** (rollback on partial build) against
+  a fake nft. Whether a real host actually drops/accepts the intended traffic is
+  unverified.
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, masquerade batch)
 
 Full gates after the `system/masquerade.py` batch. Passed pre-commit (p2.md);
