@@ -19,8 +19,6 @@ Usage:
 
 from __future__ import annotations
 
-import shutil
-import subprocess
 import threading
 import time
 
@@ -51,21 +49,6 @@ class DeauthManager:
         self._targets: set[str] = set()
         self._running = False
         self._active = SCAPY_WIFI_OK and bool(bssid) and bool(iface)
-
-    @staticmethod
-    def _enable_monitor(iface: str) -> str:
-        """
-        Try to switch iface to monitor mode with iw.
-        Returns the monitor interface name (may be same iface or 'ifacemon').
-        """
-        iw = shutil.which("iw")
-        if not iw:
-            return iface
-        try:
-            subprocess.run([iw, "dev", iface, "set", "monitor", "none"], capture_output=True)
-        except Exception:
-            pass
-        return iface
 
     def start_pmf_bypass(self, target_mac: str):
         """

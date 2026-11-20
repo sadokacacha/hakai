@@ -2095,13 +2095,27 @@ is additive. No import cycle (`oui_lookup` → `persistence` → `netutil`, veri
 *Verification:* `pytest` **118 passed**, `ruff`/`mypy` clean (65 files), behaviour
 spot-check green.
 
-**P4-3 — Remove dead code.** *Problem:* carrying unreachable code that confuses
-maintenance. (a) `IPTManager.add_drop/remove_drop/is_dropped/_dropped` — the
-DROP half is unreferenced by the app (`network/arp` owns cuts); note it is
-covered by `test_iptables_manager::test_drop_bookkeeping`, so removal must drop
-that test too. (b) `deauth._enable_monitor` — zero callers. (c) the MDNS-5 TXT
-branch (dead because scapy TXT rdata is a list). *Fix:* delete with a grep proof
-per item; low risk. Deferred only to keep P4-1 cohesive.
+**P4-3 — Remove dead code. DONE (a, b, c; d deferred).**
+*Problem:* unreachable code that confuses maintenance.
+(a) `IPTManager.add_drop/remove_drop/remove_all_drops/is_dropped/_dropped` — the
+DROP half, unreferenced by the app (`network/arp` owns cuts). **Removed**; the
+`_dropped` set and the `remove_all_drops()` call in `cleanup()` are gone, the
+module docstring updated, and the two tests that exercised it
+(`test_iptables_manager::test_drop_bookkeeping` and
+`test_iptables_hardening::test_add_drop_*`) were removed / trimmed.
+(b) `deauth._enable_monitor` — zero callers. **Removed**, along with its now-unused
+`import shutil` and `import subprocess`.
+(c) `persistence.is_private_mac` — dead after P4-1b (no app caller; identical to
+`is_stealth_mac`). **Removed** with its test.
+(d) MDNS-5 TXT branch — **deferred**: it is only dead for its *purpose* (TXT rdata
+is a list), but the `isinstance(rdata, bytes)` guard can still trigger for other
+record types, so it isn't strictly unreachable; left documented rather than risk
+touching the parser. *Grep proof:* after removal, no refs to `.add_drop`
+(IPTManager), `is_dropped`, `_enable_monitor`, or `is_private_mac` remain
+(`xdp_engine.add_drop` is a distinct, live method). *Verification:* `pytest`
+**114 passed** (−4 dead-code tests), `ruff`/`mypy` clean (65 files), 30/30 imports.
+*(The full-pytest gate caught that `test_iptables_hardening.py` — a separate file
+— also tested the removed `add_drop`; fixed before commit.)*
 
 **P4-4 — Config keys defined but never consumed.** *Problem:* `DEFAULT_CFG` in
 `persistence` defines `arp_interval`/`watchdog_interval`, but `network/arp`

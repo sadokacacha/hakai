@@ -33,19 +33,8 @@ def test_accounting_bookkeeping():
     assert "10.0.0.5" not in m._accounting
 
 
-def test_drop_bookkeeping():
-    m = IPTManager()
-    assert m.is_dropped("10.0.0.9") is False
-    m.add_drop("10.0.0.9")
-    assert m.is_dropped("10.0.0.9") is True
-    m.remove_drop("10.0.0.9")
-    assert m.is_dropped("10.0.0.9") is False
-
-
 def test_cleanup_clears_all():
     m = IPTManager()
     m.add_accounting("10.0.0.1")
-    m.add_drop("10.0.0.2")
     m.cleanup()
     assert not m._accounting
-    assert not m._dropped

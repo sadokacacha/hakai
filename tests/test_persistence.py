@@ -1,4 +1,5 @@
 """Tests for pure helpers in core/persistence.py."""
+
 from types import SimpleNamespace
 
 from core.persistence import (
@@ -7,7 +8,6 @@ from core.persistence import (
     fmt_mbps,
     fmt_speed,
     fmt_total,
-    is_private_mac,
     is_stealth_mac,
     sanitize_mdns_name,
     sanitize_vendor,
@@ -33,13 +33,6 @@ def test_fmt_mbps():
     assert fmt_mbps(0) == "0.00 Mbps"
     assert fmt_mbps(0.5) == "500 Kbps"
     assert fmt_mbps(2.5) == "2.50 Mbps"
-
-
-def test_is_private_mac():
-    assert is_private_mac("02:11:22:33:44:55") is True
-    assert is_private_mac("06:11:22:33:44:55") is True
-    assert is_private_mac("00:11:22:33:44:55") is False
-    assert is_private_mac("") is False
 
 
 def test_is_stealth_mac():
@@ -73,9 +66,17 @@ def test_is_junk_hostname():
 
 def _fake_device(**kw):
     base = dict(
-        nickname="", vendor="", os_guess="", hostname="",
-        recon_data={}, tcp_ttl=0, tcp_window=0,
-        mac="00:11:22:33:44:55", services={}, open_ports=[], confidence=0,
+        nickname="",
+        vendor="",
+        os_guess="",
+        hostname="",
+        recon_data={},
+        tcp_ttl=0,
+        tcp_window=0,
+        mac="00:11:22:33:44:55",
+        services={},
+        open_ports=[],
+        confidence=0,
     )
     base.update(kw)
     return SimpleNamespace(**base)

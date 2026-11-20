@@ -1,10 +1,10 @@
 """
 Regression tests for system/iptables_manager.py hardening (Phase-2 hunt).
 
-IPT-1  add_accounting/add_drop ignored the insert (-A/-I) exit code: they
-       recorded the IP even when the rule failed to apply, silently. They now
-       return a success bool and log the failure (still tracking the IP so
-       cleanup removes any rule that *did* get added).
+IPT-1  add_accounting ignored the insert (-A) exit code: it recorded the IP even
+       when the rule failed to apply, silently. It now returns a success bool and
+       logs the failure (still tracking the IP so cleanup removes any rule that
+       *did* get added). (The DROP half was removed in P4-3.)
 IPT-2  no ipaddress validation before issuing root iptables commands.
 IPT-5  _ipt raised on a missing iptables binary instead of degrading.
 
@@ -40,12 +40,6 @@ def test_add_accounting_success_when_rule_present(monkeypatch):
     assert "10.0.0.5" in m._accounting
 
 
-def test_add_drop_reports_insert_failure(monkeypatch):
-    monkeypatch.setattr(ipt_mod, "_ipt", lambda *a, **k: _cp(1))
-    m = IPTManager()
-    assert m.add_drop("10.0.0.9") is False
-
-
 def test_add_accounting_rejects_invalid_ip(monkeypatch):
     calls: list = []
     monkeypatch.setattr(ipt_mod, "_ipt", lambda *a, **k: calls.append(a) or _cp(0))
@@ -53,14 +47,6 @@ def test_add_accounting_rejects_invalid_ip(monkeypatch):
     assert m.add_accounting("not-an-ip") is False
     assert calls == [], "no iptables command may be issued for an invalid IP"
     assert "not-an-ip" not in m._accounting
-
-
-def test_add_drop_rejects_invalid_ip(monkeypatch):
-    calls: list = []
-    monkeypatch.setattr(ipt_mod, "_ipt", lambda *a, **k: calls.append(a) or _cp(0))
-    m = IPTManager()
-    assert m.add_drop("999.1.1.1") is False
-    assert calls == []
 
 
 def test_ipt_handles_missing_binary(monkeypatch):

@@ -499,11 +499,6 @@ ROUTER_VENDORS = {
 VM_VENDORS = {"VMware", "VirtualBox", "QEMU/KVM", "Parallels", "Xen"}
 
 
-def is_private_mac(mac: str) -> bool:
-    """Detects if a MAC is randomized/private (Locally Administered bit set)."""
-    return randomized_mac(mac)
-
-
 def lookup_oui(mac: str) -> str:
     if not mac:
         return ""
