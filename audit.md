@@ -1453,6 +1453,60 @@ removed (root + Linux + lab + manual).
 
 ---
 
+### `ui/info_dialog.py` — RESOLVED (1 fixed, 1 hardened) + 2 documented
+
+| ID | Sev | Location | Status |
+|----|-----|----------|--------|
+| INFO-3 | Medium | `do_fingerprint` callback | **Fixed** |
+| INFO-6 | Low | ping/traceroute label update vs destroyed dialog | **Fixed** |
+| INFO-1 | Low | ip not validated before ping/traceroute | Documented |
+| INFO-5 | Low | ping has no subprocess timeout | Documented |
+
+**INFO-3 — Cross-thread Tk update of the dashboard row.** `do_fingerprint`'s
+`_done` runs on the fingerprint worker thread (`controller.fingerprint` →
+`fingerprint_device` spawns a thread). It marshalled its own dialog-label update
+via `dlg.after(0, …)`, but called `fingerprint_done_cb(ip, dev)` — the dashboard's
+`_update_row` — **directly**, updating a dashboard widget off the UI thread (the
+same hazard class as DASH-1/CTL-3). *Fix:* extracted `_marshal(widget, func)`
+(schedules via `widget.after(0,…)`, no-op if the widget was destroyed) and
+`_make_fingerprint_done(dlg, parent, rl, cb)`, which marshals the label update on
+the dialog **and** the row-refresh callback on the parent window (which outlives
+the dialog). *Regression:* `test_fingerprint_done_marshals_callback_not_direct`
+(asserts `cb` is scheduled on `parent.after`, not called directly),
+`test_fingerprint_done_without_callback_is_safe`, `test_marshal_*`.
+
+**INFO-6 — Destroyed-dialog safety.** The ping/traceroute worker threads did
+`dlg.after(0, …)`; if the user closed the dialog mid-operation, that raised
+`TclError` in the daemon thread. Now routed through `_marshal`, which swallows
+`TclError`/`RuntimeError`.
+
+**INFO-1 (documented) — IP validation.** `ip` flows into `ping`/`traceroute`
+(arg lists, no injection). It is a device-dict key already validated by the
+scanner (`_merge_host` uses `ipaddress`), so this is low; not adding another
+validation site here (Phase-4 will centralise it).
+
+**INFO-5 (documented) — ping timeout.** `ping -c 4 -W 1` self-limits (~4 s), so
+the missing subprocess-level `timeout=` is low risk; `traceroute` already has
+`timeout=25`.
+
+**Clean:** the ping/traceroute/fingerprint workers already correctly marshalled
+their *own* label updates via `after` (now via `_marshal`); `do_reset_usage` runs
+on the UI thread and `reset_usage` is lock-guarded.
+
+Verification (info_dialog batch, per updated p2.md):
+per-file `ruff`/`mypy` on **src + test** (importing `ui.info_dialog` loads only
+tkinter + theme constants, no Tk root — the helpers are unit-testable with mocks),
+then full gates — `pytest -v` → **108 passed** (+4); `ruff check .` → clean;
+`ruff format --check` my 2 files → clean; `mypy .` → no issues (61 files).
+
+**Limits (info_dialog):** the marshalling helpers are unit-tested with mock
+widgets; the wiring into the (Tk-closure) `do_fingerprint`/`do_ping`/
+`do_traceroute` handlers is by construction (they call `_marshal`/
+`_make_fingerprint_done`) — not exercised against a live Tk dialog (no display;
+manual).
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, firewall_apex batch)
 
 Full gates after the `system/firewall_apex.py` batch. Passed pre-commit (p2.md);
