@@ -3,8 +3,15 @@
 scapy>=2.7.0
 customtkinter>=5.2.0
 # Pillow floor is 11.0.0 to stay clear of the image-parsing CVEs fixed across
-# the 10.x line (icon loading uses PIL.Image).
+# the 10.x line (icon loading uses PIL.Image). Tested-current: 13.0.0.
 Pillow>=11.0.0
+
+# ── Dev tooling (not needed to run the app; `pip install` for the gates) ──
+# Pinned to the versions the p8 gates are verified green against on Python
+# 3.14.8 — see audit.md "Tool Tribunal + Upgrade — 2026-11-20".
+#   pytest==9.2.0
+#   ruff==0.17.6
+#   mypy==2.4.1
 
 # ── Optional (imported behind try/except; the app degrades gracefully) ──
 # Richer OUI/vendor resolution:

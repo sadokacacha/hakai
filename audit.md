@@ -2292,6 +2292,80 @@ this pass.
 
 ---
 
+## Tool Tribunal + Upgrade — 2026-11-20 (Phase 3, re-run with bumps)
+
+Re-run of the tribunal **with the upgrade step actioned**. The prior passes
+(2026-11-19 / 2026-11-20) produced the matrix but deferred every bump; this pass
+applies the outdated-patch bumps p0 found and re-verifies the gates.
+
+**Environment (measured):** Linux (Arch, kernel 7.2.9-arch1-1),
+Python **3.14.8**, **Tcl/Tk 8.6** (`tkinter.TkVersion`), project `.venv`.
+Pre-bump installed: scapy 2.8.0, customtkinter 6.0.0, Pillow 12.3.0,
+pytest 9.1.1, ruff 0.17.0, mypy 2.4.0.
+
+### Python 3.14 verification (scapy + CustomTkinter) — empirical, not release-note mining
+
+Upstream release notes give no explicit "3.14 supported" statement for either
+(scapy 2.8.0 notes only drop 3.7/3.8; CustomTkinter has no 3.14 note). The Tk 9.0
+Linux breakage reported for some 3.14 builds **does not apply here** — this host's
+interpreter bundles **Tcl/Tk 8.6**. Verified by running on 3.14.8, which is a
+stronger signal than a changelog line:
+
+- **scapy 2.8.0** — `Ether()/ARP(op=2, …)` builds and byte-encodes (42 bytes);
+  `IP/UDP/DNS/Dot11` layers import. ✓ on 3.14.8.
+- **customtkinter 6.0.0** — `ctk.CTk()` instantiates and destroys a real window
+  on this Tk 8.6 / 3.14.8 host. ✓
+- Full suite: **116 tests pass** on 3.14.8. Both are already at the **latest
+  published version** (scapy max = 2.8.0, ctk max = 6.0.0), so there is nothing
+  to upgrade *to* — verdict KEEP, confirmed current.
+
+### Matrix
+
+| Existing | Candidate | Existing weakness | Candidate advantage | Compatibility | Migration cost | Performance | Maintenance | Verdict |
+|---|---|---|---|---|---|---|---|---|
+| **scapy 2.8.0** (15 sites, ~24 layers) | raw sockets / libpcap / pyroute2 | heavy import; dynamic `scapy.all` symbols defeat mypy `attr-defined` | stdlib sockets = zero deps | **3.14.8 verified** (packet build/encode ✓); core to the engine | very high (reimplement entire engine) | send/sniff slower than raw, but no measured bottleneck | actively maintained; already latest (2.8.0); floor ≥2.7.0 for GHSA-cq46 | **KEEP** (latest) |
+| **customtkinter 6.0.0** (dashboard only) | raw tkinter/ttk (stdlib); PySide6; Dear PyGui | toolkit is **mixed** — 3 dialogs already use stdlib tkinter | ttk drops a dep; Qt is richer | **3.14.8 / Tk 8.6 verified** (`CTk()` window ✓) | medium (one window) → high (Qt) | adequate at this scale | maintained; already latest (6.0.0); smaller community than Qt | **KEEP** (latest; mixed-toolkit smell is a Phase-6 call) |
+| **Pillow 12.3.0** | stdlib `PhotoImage(...).subsample(16)` / pre-sized 64px asset | whole image lib for **one** call (`dashboard.py:57`) | zero deps; Tk 8.6 reads PNG natively | `Image.open(...).resize((64,64))` works on **13.0.0** (no removed API hit) | low to remove | subsample is nearest-neighbour (slightly worse) | maintained; CVE floor ≥11.0.0 | **BUMP 12.3.0→13.0.0** (removal still INVESTIGATE → Phase-6) |
+| **iptables** (12 sites) | nftables; pyroute2 | app runs **both** iptables + nft (dual stacks) | one netlink-native backend | core to cut/accounting/REDIRECT | high | fine | stable; iptables-nft shim ubiquitous | **KEEP** (consolidation is a Phase-4 call) |
+| **nftables** (10 sites) | iptables | only evasion modules use it; overlaps iptables | — | fine | — | fine | stable | **KEEP** (evasion out of reliability scope) |
+| **tc** (3 sites) | pyroute2 (tc via netlink) | string-built HTB cmds, fragile parse | typed netlink, no shell parse | core to bandwidth limit | medium | equivalent | iproute2 ubiquitous | **KEEP** |
+| **XDP/eBPF via `bcc`** (1 site, optional) | remove layer; libbpf/bpftool | **redundant** — drops traffic iptables FORWARD DROP already drops | near-zero-CPU drop | optional; degrades to no-op | low to remove | best, but unneeded | bcc heavy, slower-moving | **INVESTIGATE → Phase-7** (unchanged) |
+| **pytest 9.1.1** | stdlib `unittest` | — (functional, doing real work) | one less dev dep | 116 tests collect+pass on 9.2.0/3.14.8 | trivial bump | n/a | maintained | **BUMP 9.1.1→9.2.0** (KEEP tool) |
+| **ruff 0.17.0** | flake8+isort+pyupgrade | — (catches real defects; E722 enforces no-bare-except) | — | selected rule set (E4/E7/E9/F/I/UP/RUF) still clean on 0.17.6 | trivial bump | faster | very active | **BUMP 0.17.0→0.17.6** (KEEP tool) |
+| **mypy 2.4.0** | pyright | under-powered on the engine (`attr-defined` off for `network.*`) | — | clean (68 files) on 2.4.1/3.14.8 | trivial bump | n/a | maintained | **BUMP 2.4.0→2.4.1** (KEEP tool; strengthen later) |
+
+**Stdlib-preferred note:** no third-party candidate wins this pass — the only
+stdlib swap that genuinely fits (Pillow → `PhotoImage.subsample`) is a quality
+trade-off deferred to the Phase-6 asset pass, not a p3 action.
+
+### Verdict outcomes
+
+- **KEEP (no change):** scapy, customtkinter, iptables, nftables, tc — the two
+  runtime libs verified current + 3.14-compatible above.
+- **BUMP (outdated patches from p0) — ACTIONED:**
+  `pip install pillow==13.0.0 pytest==9.2.0 ruff==0.17.6 mypy==2.4.1`
+  (+ `mypy_extensions 1.1.0→1.2.0`). Single commit; **p8 re-run green**:
+
+  | Gate | Pre-bump | Post-bump |
+  |---|---|---|
+  | `pytest -q` | 116 passed | **116 passed** |
+  | `ruff check .` | clean | **clean** (0.17.6 adds no new findings in the selected rules) |
+  | `ruff format --check .` | 8 would reformat | **8 would reformat** (unchanged deliberate debt) |
+  | `mypy .` | Success, 68 files | **Success, 68 files** |
+  | icon path `dashboard.py:57` | ok | **ok** on Pillow 13 (`icon.png` → 64×64) |
+
+  No rollback needed (no red). `requirements.txt`: Pillow runtime floor kept at
+  the CVE-driven `>=11.0.0` (no new CVE justifies raising a *minimum*; 13.0.0 is
+  now the tested-current version); the three dev tools recorded as pinned,
+  commented dev deps (file's existing convention for non-runtime deps) so the
+  bumped versions are durable and discoverable. No lockfile exists.
+- **INVESTIGATE (deferred, unchanged):** Pillow removal → Phase-6; XDP/`bcc`
+  redundant drop → Phase-7; 4-way OUI redundancy → Phase-4 dedupe.
+- **No REPLACE / no REMOVE** this phase → no migration/rollback or removal-grep
+  plans required.
+
+---
+
 ## 0. Re-audit — 2026-10-13
 
 **Environment:** Windows 11, Python 3.13.15, project `venv/` (scapy 2.8.0,
