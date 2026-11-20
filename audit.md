@@ -1549,6 +1549,46 @@ the validation path is synchronous/deterministic; no real nmap scan is run
 
 ---
 
+### `network/dhcp_sniffer.py` — RESOLVED (1 fixed) — mostly clean
+
+| ID | Sev | Location | Status |
+|----|-----|----------|--------|
+| DHCP-1 | Low-Med | `sniff_dhcp_os` option loop | **Fixed** |
+| DHCP-2 | Low | `best_ip` not validated | Documented |
+
+**This file is mostly clean** — pure scapy DHCP option parsing (no subprocess,
+state, restoration, or Windows concern); every layer access is `haslayer`-guarded;
+the `os_cb`/`hostname_cb` callbacks run on the intel-sniffer thread and only
+mutate device state under the controller lock (no Tk), so cross-thread UI is the
+caller's concern, not this file's.
+
+**DHCP-1 — Malformed option aborts the parse (untrusted-input robustness).** The
+loop skipped non-tuples (`isinstance(opt, tuple)`) but not **short** tuples, so a
+crafted/malformed option like `("hostname",)` made `opt[1]` raise `IndexError`.
+DHCP is untrusted LAN broadcast input, and the exception propagated out of
+`sniff_dhcp_os` into the controller's intel-sniffer loop, whose broad `except`
+would restart the whole sniffer (losing a window of DHCP/mDNS/recon). *Fix:* also
+skip options with `len(opt) < 2`. *Regression:*
+`test_malformed_short_option_does_not_abort_parse` (valid options after the
+malformed one are still parsed), `test_valid_hostname_and_os_parse`.
+
+**DHCP-2 (documented) — `best_ip` not validated.** A crafted `requested_addr`
+could put a garbage string in `best_ip`, which flows to the by-IP pending-name
+map — but the hostname is also applied by MAC (the reliable path) and a garbage
+IP key never matches a real device, so it is inert. Not fixed.
+
+Verification (dhcp_sniffer batch, per updated p2.md):
+per-file `ruff`/`mypy` on **src + test** (scapy import uses a targeted
+`# type: ignore[attr-defined]`), then full gates — `pytest -v` → **114 passed**
+(+2); `ruff check .` → clean; `ruff format --check` my 2 files → clean;
+`mypy .` → no issues (63 files).
+
+**Limits (dhcp_sniffer):** the parser is exercised with a fake packet carrying
+the exact option structures; real wire DHCP dissection (where scapy normally
+produces well-formed 2-tuples) is not exercised.
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, firewall_apex batch)
 
 Full gates after the `system/firewall_apex.py` batch. Passed pre-commit (p2.md);

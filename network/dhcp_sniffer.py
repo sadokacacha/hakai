@@ -8,6 +8,7 @@ Extracts two things from DHCP packets:
 Both are passed to the controller via callbacks so devices with
 randomised MACs still get named/classified correctly.
 """
+
 from __future__ import annotations
 
 from scapy.all import BOOTP, DHCP, IP, Ether
@@ -24,8 +25,8 @@ def sniff_dhcp_os(pkt, os_cb, hostname_cb=None):
         return
 
     opts = pkt[DHCP].options
-    mac  = pkt[Ether].src if pkt.haslayer(Ether) else None
-    ip   = pkt[IP].src   if pkt.haslayer(IP)    else None
+    mac = pkt[Ether].src if pkt.haslayer(Ether) else None
+    ip = pkt[IP].src if pkt.haslayer(IP) else None
 
     # DHCP Discover/Request packets often use 0.0.0.0 as the source before the
     # lease is assigned. Prefer the requested/assigned address when available,
@@ -37,7 +38,10 @@ def sniff_dhcp_os(pkt, os_cb, hostname_cb=None):
     requested_ip = ""
 
     for opt in opts:
-        if not isinstance(opt, tuple):
+        # DHCP is untrusted LAN input: skip anything that isn't a (name, value)
+        # pair so a malformed/short option tuple can't raise IndexError on opt[1]
+        # (which would abort the parse and restart the intel sniffer).
+        if not isinstance(opt, tuple) or len(opt) < 2:
             continue
 
         if opt[0] in ("requested_addr", "requested_ip_address"):
@@ -46,7 +50,7 @@ def sniff_dhcp_os(pkt, os_cb, hostname_cb=None):
         # Option 55 — parameter request list → OS fingerprint
         if opt[0] == "param_req_list" or opt[0] == "parameter_request_list":
             signature = list(opt[1]) if hasattr(opt[1], "__iter__") else []
-            os_guess  = infer_os(signature)
+            os_guess = infer_os(signature)
             if mac and os_guess and os_cb:
                 os_cb(mac, os_guess)
 
@@ -69,16 +73,24 @@ def sniff_dhcp_os(pkt, os_cb, hostname_cb=None):
                 raw = raw.decode(errors="ignore")
             vc = str(raw).lower()
             if mac and os_cb:
-                if "android" in vc:             os_cb(mac, "Android")
-                elif "iphone" in vc or "ipad" in vc: os_cb(mac, "Apple/iOS")
-                elif "msft" in vc:              os_cb(mac, "Windows")
-                elif "linux" in vc:             os_cb(mac, "Linux")
-                elif "huawei" in vc:            os_cb(mac, "Huawei Device")
-                elif "nokia" in vc:             os_cb(mac, "Nokia Modem")
-                elif "sagem" in vc:             os_cb(mac, "Sagemcom Router")
-                elif "cisco" in vc:             os_cb(mac, "Cisco Infrastructure")
-                elif "hpe" in vc:               os_cb(mac, "HP/Aruba Node")
-
+                if "android" in vc:
+                    os_cb(mac, "Android")
+                elif "iphone" in vc or "ipad" in vc:
+                    os_cb(mac, "Apple/iOS")
+                elif "msft" in vc:
+                    os_cb(mac, "Windows")
+                elif "linux" in vc:
+                    os_cb(mac, "Linux")
+                elif "huawei" in vc:
+                    os_cb(mac, "Huawei Device")
+                elif "nokia" in vc:
+                    os_cb(mac, "Nokia Modem")
+                elif "sagem" in vc:
+                    os_cb(mac, "Sagemcom Router")
+                elif "cisco" in vc:
+                    os_cb(mac, "Cisco Infrastructure")
+                elif "hpe" in vc:
+                    os_cb(mac, "HP/Aruba Node")
 
 
 def infer_os(sig: list[int]) -> str:
@@ -88,26 +100,35 @@ def infer_os(sig: list[int]) -> str:
     sig_tuple = tuple(sig)
 
     # ── Exact surgical signatures ─────────────────────────────────────────────
-    if sig_tuple == (1, 3, 6, 15, 119, 252):              return "Apple/iOS (Modern)"
-    if sig_tuple == (1, 3, 6, 15, 119):                    return "Apple Device"
-    if sig_tuple == (1, 3, 6, 15, 31, 33, 43, 44, 46,
-                     47, 119, 121, 249, 252):               return "Windows 11"
-    if sig_tuple == (1, 3, 6, 15, 31, 33, 43, 44, 46,
-                     47, 121, 249, 252):                    return "Windows 10"
-    if sig_tuple == (1, 3, 6, 15, 31, 33, 43, 44, 46,
-                     47, 121, 249):                         return "Windows 10/8"
-    if sig_tuple == (1, 3, 6, 15, 44, 46, 47, 31, 33,
-                     121, 249, 43):                         return "Windows 7"
-    if 121 in sig and 43 in sig and 12 in sig:             return "Android Device"
-    if 12 in sig and 15 in sig and 28 in sig:              return "Linux System"
-    if sig_tuple == (1, 28, 2, 3, 15, 6, 119, 12, 44,
-                     47, 26, 121, 42):                      return "macOS"
+    if sig_tuple == (1, 3, 6, 15, 119, 252):
+        return "Apple/iOS (Modern)"
+    if sig_tuple == (1, 3, 6, 15, 119):
+        return "Apple Device"
+    if sig_tuple == (1, 3, 6, 15, 31, 33, 43, 44, 46, 47, 119, 121, 249, 252):
+        return "Windows 11"
+    if sig_tuple == (1, 3, 6, 15, 31, 33, 43, 44, 46, 47, 121, 249, 252):
+        return "Windows 10"
+    if sig_tuple == (1, 3, 6, 15, 31, 33, 43, 44, 46, 47, 121, 249):
+        return "Windows 10/8"
+    if sig_tuple == (1, 3, 6, 15, 44, 46, 47, 31, 33, 121, 249, 43):
+        return "Windows 7"
+    if 121 in sig and 43 in sig and 12 in sig:
+        return "Android Device"
+    if 12 in sig and 15 in sig and 28 in sig:
+        return "Linux System"
+    if sig_tuple == (1, 28, 2, 3, 15, 6, 119, 12, 44, 47, 26, 121, 42):
+        return "macOS"
 
     # ── Broad heuristics ─────────────────────────────────────────────────────
-    if 119 in sig and 252 in sig and 95 in sig:            return "Apple/iOS"
-    if 119 in sig and 252 in sig:                          return "Apple Device"
-    if 43 in sig and 60 in sig:                            return "Android Device"
-    if 121 in sig and 249 in sig and 43 in sig:            return "Windows"
-    if 26 in sig and 121 in sig and 42 in sig:             return "macOS/BSD"
+    if 119 in sig and 252 in sig and 95 in sig:
+        return "Apple/iOS"
+    if 119 in sig and 252 in sig:
+        return "Apple Device"
+    if 43 in sig and 60 in sig:
+        return "Android Device"
+    if 121 in sig and 249 in sig and 43 in sig:
+        return "Windows"
+    if 26 in sig and 121 in sig and 42 in sig:
+        return "macOS/BSD"
 
     return "Generic Device"
