@@ -798,6 +798,64 @@ UPnP/NetBIOS probing against live hosts is not exercised.
 
 ---
 
+### `network/scanner.py` — RESOLVED (2 fixed) + 3 documented
+
+| ID | Sev | Location | Status |
+|----|-----|----------|--------|
+| SCAN-3 | Medium (security) | `_fetch_upnp_friendly` | **Fixed** |
+| SCAN-2 | Low-Med | `_merge_host` | **Fixed** |
+| SCAN-1 | Low | `resolve_hostname` negative cache | Documented |
+| SCAN-4 | Low | module thread pools never shut down | Documented |
+| SCAN-5 | Low | IPv4-only discovery / nmap rc unchecked | Documented |
+
+**SCAN-3 — Untrusted SSDP LOCATION fetched with any URL scheme (SSRF / local
+file read).** `_passive_sniff` extracts the `LOCATION` header from an SSDP packet
+— fully attacker-controlled by any device on the LAN — and `_fetch_upnp_friendly`
+passed it straight to `urllib.request.urlopen`. `urllib` honours `file://`, so a
+rogue `LOCATION: file:///etc/passwd` makes the **root** scanner read local files
+(and any `http://internal-host/...` enables SSRF to internal services). *Fix:*
+`urlparse(location_url).scheme not in ("http", "https")` → return before
+fetching. *Regression:* `test_upnp_fetch_rejects_file_scheme`,
+`test_upnp_fetch_allows_http_scheme`.
+
+**SCAN-2 — Loose IP validation in `_merge_host`.** The `^\d+\.\d+\.\d+\.\d+$`
+regex accepts out-of-range octets (`192.300.1.1`), so malformed `arp`/scapy rows
+became bogus Device entries. *Fix:* validate with `ipaddress.ip_address`, require
+IPv4 unicast, reject the unspecified address and first-octet ≥ 224 (preserving
+the old multicast/broadcast cutoff). *Regression:* `test_merge_host_rejects_invalid_octets`
+(+ IPv6/multicast/valid behaviour pinned).
+
+**SCAN-1 (documented) — Sticky negative hostname cache.** `resolve_hostname`
+caches a failed lookup as `""` permanently, so a device whose name becomes
+resolvable later (late PTR/mDNS) is never retried. Not changed: dropping the
+negative cache would re-hammer nmap/avahi each scan — a discovery-tuning
+trade-off, not a reliability bug.
+
+**SCAN-4 (documented) — Thread pools never shut down.** `_hn_pool`/`_guess_pool`
+/`_upnp_pool` are module-level `ThreadPoolExecutor`s with no `shutdown()`; the
+interpreter's atexit join handles process exit, so no hang, but they are not
+owned by any lifecycle.
+
+**SCAN-5 (documented) — Scope / best-effort.** Discovery is IPv4-only
+(`_merge_host` rejects IPv6 by design); nmap/scapy/arp layers swallow errors and
+don't check nmap's return code (a failed nmap silently yields no hosts, with the
+scapy/arp layers as the safety net).
+
+**Clean:** subprocess calls (nmap/avahi/arp) use arg lists with timeouts;
+`guess_identity_from_ports` closes its probe sockets via `with`; `_hn_cache`
+access is consistently under `_hn_lock`; Windows `arp -a` branch is explicit.
+
+Verification (scanner batch):
+`pytest -q` → **68 passed** (+6) · `ruff check` / `ruff format` on changed
+files → clean · `mypy .` → no issues (49 files). (Repositioned a pre-existing
+`# type: ignore[arg-type]` on the scapy `srp` call that `ruff format` had
+detached from its line.)
+
+**Limits (scanner):** the scheme guard and `_merge_host` validation are pure-
+function/mocked-`urlopen` tests; live SSDP/nmap/ARP scanning is not exercised.
+
+---
+
 ## Tool & Dependency Tribunal — 2026-11-19 (Phase 3)
 
 Matrix only — no dependency or config changes made in this phase. Evidence is
