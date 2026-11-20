@@ -1589,6 +1589,46 @@ produces well-formed 2-tuples) is not exercised.
 
 ---
 
+### Sweep: `oui_lookup.py`, `device.py`, `limit_dialog.py` — CLEAN; `protection_panel.py` — 1 documented
+
+Four small files reviewed together. Three are clean; no code changed (nothing
+confirmed-buggy with a clean test seam), so this entry records the review.
+
+**`network/oui_lookup.py` — CLEAN.** `get_vendor`/`is_randomized` are pure and
+length-guarded (empty/short MAC → `"Unknown Device"`, no crash); no subprocess,
+state, restoration, or cross-thread concern. *Nit (not a bug):* `OuiLookup()` is
+instantiated per call, but only when the optional `ouilookup` package is
+installed (it isn't in this env, so the branch is skipped). Duplicate OUI stack
+vs `persistence` is tracked in the Phase-3 tribunal (Phase-4 dedupe), not here.
+
+**`core/device.py` — CLEAN.** Pure data model. `update_history` appends and pops
+`rx_history`/`tx_history` together (never desyncs); `to_state` is JSON-serializable
+(port keys stringified); the `nickname` property is a dict read. Mutated under the
+controller lock and read on the UI thread — no race.
+
+**`ui/limit_dialog.py` — CLEAN.** `_apply` already validates the bandwidth input
+(`int(sv.get())` guarded against `TclError`/`ValueError`, rejects `kb <= 0` before
+calling `tc`) — a prior fix (commit c6bfe88). Runs on the UI thread; no bugs.
+
+**`ui/protection_panel.py` — PP-1 (Low, documented): UI-thread-blocking.**
+`toggle_stack`, `toggle_chameleon`, and `update_btns` run `subprocess.run`
+(`sysctl`, `ip link show`) **synchronously on the Tk thread** (lines ~116/130/
+153/159) to read current state, and the `ctrl.toggle_*` / `apply_static_config`
+button handlers run their privileged subprocesses synchronously too — so the
+modal freezes for the duration. Same class as DASH-2 / STEALTH-6. Not a crash or
+data bug, and all on the UI thread (no cross-thread hazard — `log_cb` is the now
+thread-safe `log_tactical`). *Deferred:* the fix (offload the handlers to worker
+threads and marshal the widget-state refresh back via `after`) is a broad
+multi-handler change across closures with no clean unit-test seam; grouped with
+DASH-2 for a focused UI-threading pass. Also noted: the state detection reads the
+OS (`"128" in sysctl output`, `"mtu 1492" in ip output`) rather than tracking
+app state, which is fragile (false-positive if the host's real TTL/MTU matches).
+
+Verification (sweep): no code changed — full suite **114 passed**, `ruff check .`
+clean, `mypy .` clean (63 files), confirming the three files need no fix.
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, firewall_apex batch)
 
 Full gates after the `system/firewall_apex.py` batch. Passed pre-commit (p2.md);
