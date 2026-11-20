@@ -1350,6 +1350,58 @@ concurrent logging (no display available; that is manual).
 
 ---
 
+### `system/chameleon.py` — RESOLVED (4 fixed) + 1 documented
+
+*Evasion module. The MTU/MSS values (1492/1420) are unchanged; only restore
+correctness + cleanup hygiene are fixed.*
+
+| ID | Sev | Location | Status |
+|----|-----|----------|--------|
+| CHAM-1 | Medium | disable MTU restore | **Fixed** |
+| CHAM-2 | Medium | disable step isolation | **Fixed** |
+| CHAM-3 | Low | enable `-A` (duplicate rules) | **Fixed** |
+| CHAM-4 | Low | empty-iface guard | **Fixed** |
+| CHAM-6 | Low | Windows | Documented (honest, not fake) |
+
+**CHAM-1 — Hardcoded MTU restore.** Disable did `mtu = "1500"` unconditionally,
+but the **original MTU was never captured** — a VPN/PPPoE (1492/1480) or jumbo
+(9000) interface was clobbered to 1500 on un-obfuscate (state drift). Same class
+as NET-2's hardcoded ethtool restore. *Fix:* `_engage` captures the current MTU
+(`ip -o link show`) into `_ORIG_MTU[iface]` before changing it; `_restore` writes
+that captured value back (falling back to 1500 only if never captured).
+*Regression:* `test_disable_restores_captured_original_mtu`.
+
+**CHAM-2 — Partial restore.** Disable set MTU with `check=True` then removed the
+clamp; a MTU failure raised and skipped the clamp removal. *Fix:* `_restore`
+isolates the MTU write and the clamp removal (each its own `try`, rc checked,
+logged) and returns `[EVASION: RESTORE INCOMPLETE]` on partial failure.
+
+**CHAM-3 — Duplicate mangle rules.** Enable ran `iptables … -A … TCPMSS` with no
+`-C`, so a repeated engage stacked identical POSTROUTING rules; disable removed
+only one. *Fix:* `-C` before `-A` (idempotent add); `_restore` loops `-D` to
+clear duplicates. *Regression:* `test_enable_checks_before_adding_mss_rule`.
+
+**CHAM-4 — Empty-iface guard.** `toggle_chameleon("", …)` would run `ip link set
+dev "" …`. *Fix:* return an error before any command when `iface` is empty.
+*Regression:* `test_toggle_rejects_empty_iface`.
+
+**CHAM-6 (documented) — Windows.** `ip`/`iptables` raising `FileNotFoundError`
+is caught and returns `[ERROR: CHAMELEON_FAIL …]` — honest, not fake success.
+
+**Not touched (scope):** the MTU 1492 / MSS 1420 evasion values are unchanged —
+`_engage` applies exactly what it did before, plus capture + idempotency.
+
+Verification (chameleon batch, per updated p2.md):
+per-file `ruff`/`mypy` on **src + test**, then full gates — `pytest -v`
+→ **101 passed** (+3); `ruff check .` → clean; `ruff format --check` my 2 files →
+clean; `mypy .` → no issues (59 files).
+
+**Limits (chameleon):** MTU capture/restore, step isolation, and rule idempotency
+are proven against a mocked `subprocess` — no real MTU change or mangle rule is
+applied (root + Linux + lab + manual).
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, masquerade batch)
 
 Full gates after the `system/masquerade.py` batch. Passed pre-commit (p2.md);
