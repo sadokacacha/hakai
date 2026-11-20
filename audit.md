@@ -1660,6 +1660,65 @@ Full gates after the P4-6 batch (dashboard engine toggles → off the Tk thread)
 
 ---
 
+## Verification — 2026-11-20 (Phase 8, P4-6 PP-1 protection_panel threading)
+
+Closes the P4-6 **PP-1** residual: the Protection & Stealth modal ran its
+ip/nft/sysctl work (directly and via controller toggles) **synchronously on the
+Tk thread**, and `update_btns()` interleaved two probe subprocesses (sysctl TTL,
+ip-link MTU) with Tk widget writes — freezing the modal for seconds.
+
+### Change
+
+- **New `_probe_state(ctrl, run=subprocess.run) -> dict[str, bool]`** (module
+  level, Tk-free): reads the controller flags + runs the two probe subprocesses,
+  returning a state dict. Failing probes are caught (`OSError`/`SubprocessError`,
+  logged at debug) and degrade to `False` instead of propagating — the original
+  code ran those probes unguarded. Testable without a display.
+- **`_render(state)`** does the widget writes only, and is always marshalled onto
+  the Tk thread via **`_marshal` → `dlg.after(0, …)`** (guarded with `tk.TclError`
+  for the dialog-already-closed race).
+- **Every blocking handler offloaded** through the already-tested
+  `ui.async_util.run_async`: the 5 toggles (`arp`, `ks`, stealth apply/stop,
+  firewall, stack-masquerade, chameleon) via an `_offload(action, name)` helper,
+  and the two nmcli handlers (`set_static`, `set_auto`) with their modal
+  prompts/`messagebox` kept on the UI thread and only the apply offloaded. The
+  `toggle_stack`/`toggle_chameleon` state-probe reads moved into the worker.
+- Initial open now calls `refresh_btns()` (offloaded) instead of a synchronous
+  `update_btns()`, so opening the modal no longer blocks on the two probes. Minor
+  UX note: buttons show their default "OFF" text for the brief moment before the
+  first probe completes.
+- **Public interface unchanged:** `show_protection_panel(parent, ctrl, log_cb)`.
+
+### Quality gates (actual output)
+
+| Gate | Result | Evidence |
+|------|--------|----------|
+| `pytest tests/test_protection_panel.py tests/test_async_util.py -v` | **4 passed** | unit (patched `run`) |
+| `pytest -q` (full) | **119 passed** in 0.40s (+3 protection_panel) | unit + mocked |
+| `ruff check .` | **All checks passed** | static |
+| `ruff format --check .` | **8** would reformat / 77 clean — all 8 **pre-existing WIP** (incl. `protection_panel.py`, already debt at HEAD per `git show`); my new test file formatted, so count unchanged 8→8 | static |
+| `mypy .` | **Success: no issues in 69 source files** | static |
+
+### Functional checks (actual output)
+
+| Check | Result | Evidence |
+|-------|--------|----------|
+| **Import/compile** | `import ui.protection_panel` OK; `_probe_state` callable | integration |
+| **Probe reads proxies** | TTL `128` → `mask=True`, MTU `1492` → `cham=True`; probes the controller's own iface | unit |
+| **Inactive proxies** | TTL 64 / MTU 1500 → `mask`/`cham` `False` | unit |
+| **Probe failure** | `run` raising `OSError` → no raise, `mask`/`cham` `False`, controller attrs still read | unit |
+
+### Not verified (honest gaps)
+- As with the dashboard: no live Tk loop is driven, so the un-freezing is verified
+  by construction (handlers route through `run_async`; widget writes go through
+  `dlg.after`) + the `_probe_state` unit tests, not by observing a real modal.
+  Manual GUI check still required. Rapid repeated clicks spawn concurrent daemon
+  workers (same concurrency profile the dashboard P4-6 accepted; no added
+  serialization). The P4-5(2) Windows-behaviour unification remains the only open
+  P4 item, deferred pending a product decision.
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, P4-1 netutil consolidation)
 
 Full gates after the `core/netutil` consolidation (a behavior-preserving refactor
@@ -2198,6 +2257,12 @@ threaded, the widget writes marshalled via `after`), which I did not rush into a
 Tk-closure file without a test seam. The main-window freeze — the one users hit
 most — is fixed. *Verification:* `pytest` **116 passed** (+1), `ruff`/`mypy` clean
 (68 files).
+**PP-1 — DONE (2026-11-20).** The focused modal rework landed: `_probe_state`
+gathers button state off the Tk thread (test seam — Tk-free, unit-tested incl.
+subprocess-failure degrade), `_render` writes widgets marshalled via
+`dlg.after`, and every blocking handler routes through `run_async`. `pytest`
+**119 passed** (+3), `ruff`/`mypy` clean (69 files). Full record in the Phase-8
+"P4-6 PP-1 protection_panel threading" section above.
 
 ### Not changed (deliberately)
 
