@@ -1294,6 +1294,62 @@ prior config (a documented best-effort recovery).
 
 ---
 
+### `ui/dashboard.py` — RESOLVED (2 fixed) + 1 documented
+
+| ID | Sev | Location | Status |
+|----|-----|----------|--------|
+| DASH-1 | Medium | `log_tactical` (cross-thread Tk) | **Fixed** |
+| DASH-3 | Low-Med | `ctk.TclError` (invalid attr) | **Fixed** (pre-existing) |
+| DASH-2 | Low | UI-blocking toggle handlers | Documented |
+
+**DASH-1 — Cross-thread Tk writes (the sink for CTL-3 / PROT-2).** `log_tactical`
+wrote directly to the `status_box` widget (`insert`/`see`), but it is invoked
+from background threads: the scan worker (`_start_scan` → `ctrl.scan(log=…)`),
+the cut `_do` worker threads (`ctrl.cut_device(log=…)`), and the protector's
+sniffer thread (`on_protection_alert = lambda m: log_tactical(m, "danger")`).
+Tkinter is not thread-safe — concurrent widget access can corrupt the Tk state or
+crash. *Fix:* `log_tactical` now only `put()`s `(timestamp, msg)` on a
+`queue.Queue` (thread-safe); a UI-thread loop `_drain_log_queue()` (started in
+`__init__`, reschedules via `after(200,…)`) drains the queue and performs the
+only widget writes. *Regression:*
+`test_log_tactical_enqueues_and_does_not_touch_widget` (asserts no direct widget
+write + the message is enqueued), `test_drain_log_queue_writes_on_ui_thread_and_reschedules`.
+
+**DASH-3 — Invalid `ctk.TclError` (pre-existing latent bug).** Three
+`except (ctk.TclError, …)` clauses referenced a non-existent attribute
+(`customtkinter` does not re-export `TclError`), so if a real `TclError` were
+raised (widget destroyed mid-refresh), evaluating the handler would itself raise
+`AttributeError` and crash the refresh/log loop instead of swallowing it.
+Found while adding DASH-1's handler. *Fix:* import `tkinter.TclError` and use it
+in all three clauses (`_update_row` and the new `_drain_log_queue`).
+
+**DASH-2 (documented) — UI-thread-blocking toggles.** `_toggle_nuclear`,
+`_toggle_ghost`, `_toggle_arp`, `_toggle_chameleon`, `_toggle_ipv6` call their
+controller methods synchronously on the Tk thread; those run subprocesses (and
+`stealth`'s `time.sleep(1)` — STEALTH-6), freezing the UI for seconds.
+`_start_scan` already offloads to a thread; the toggles should too. Deferred:
+threading the handlers is a broader UI change, and each would then log via the
+now-thread-safe `log_tactical`. Noted for a focused UI pass.
+
+**Clean:** `_refresh_loop`, `_make_row`, `_update_row`, `_select`, and the
+`_cmd_*` handlers all run on the UI thread (via `after` or button callbacks);
+`_update_row` already guards widget access with `winfo_exists()` and the (now
+valid) `TclError` catch; row iteration uses `ctrl.snapshot_devices()`.
+
+Verification (dashboard batch, per updated p2.md):
+per-file `ruff`/`mypy` on **src + test**, then full gates — `pytest -v`
+→ **98 passed** (+2); `ruff check .` → clean; `ruff format --check` my 2 files →
+clean; `mypy .` → no issues (58 files). The existing headless dashboard test
+(`test_dashboard_wires_…`) still passes.
+
+**Limits (dashboard):** the marshalling is verified by calling the methods
+**unbound with a fake `self`** (no Tk display/CTk instance) — it proves
+`log_tactical` enqueues instead of touching the widget and that `_drain_log_queue`
+writes + reschedules. It does **not** exercise a live Tk event loop under real
+concurrent logging (no display available; that is manual).
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, masquerade batch)
 
 Full gates after the `system/masquerade.py` batch. Passed pre-commit (p2.md);

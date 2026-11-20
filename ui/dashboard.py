@@ -2,25 +2,33 @@
 ui/dashboard.py — Sovereign Apex Edition (Persistent Architecture)
 Framework: customtkinter
 """
+
 from __future__ import annotations
 
 import os
+import queue
 import threading
 from datetime import datetime
-from tkinter import simpledialog
+from tkinter import TclError, simpledialog
 
 import customtkinter as ctk
 
-from core.persistence import classify_device, fmt_total
+from core.persistence import classify_device, fmt_mbps, fmt_total
 from ui.info_dialog import show_info_dialog
 from ui.limit_dialog import show_limit_dialog
 from ui.protection_panel import show_protection_panel
 from ui.theme import *
 
 COLS = [
-    ("●", 30), ("IP ADDRESS", 140), ("IDENTITY", 320),
-    ("HOSTNAME", 180), ("STATUS", 120), ("TOTAL (↓/↑)", 200)
+    ("●", 30),
+    ("IP ADDRESS", 130),
+    ("IDENTITY", 240),
+    ("HOSTNAME", 150),
+    ("STATUS", 110),
+    ("LIVE (↓/↑)", 170),
+    ("TOTAL (↓/↑)", 160),
 ]
+
 
 class Dashboard(ctk.CTk):
     def __init__(self, controller):
@@ -28,6 +36,10 @@ class Dashboard(ctk.CTk):
         self.ctrl = controller
         self._rows: dict[str, dict] = {}
         self._sel_ips: set[str] = set()
+        # Background threads (scan worker, cut workers, protector sniffer) log via
+        # log_tactical; Tkinter isn't thread-safe, so they enqueue here and the
+        # UI-thread drain loop does the widget write.
+        self._log_queue: queue.Queue = queue.Queue()
 
         # --- Window Config ---
         self.title("HAKAI v3 // SOVEREIGN APEX")
@@ -38,30 +50,33 @@ class Dashboard(ctk.CTk):
         # --- Set Sovereign Icon ---
         try:
             from PIL import Image, ImageTk
+
             icon_p = os.path.join(os.path.dirname(__file__), "..", "assets", "icon.png")
             if os.path.exists(icon_p):
                 icon_img = ImageTk.PhotoImage(Image.open(icon_p).resize((64, 64)))
                 self.wm_iconphoto(True, icon_img)
-        except Exception: pass
+        except Exception:
+            pass
 
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
         self._build_sidebar()
-        
+
         # --- Multi-Panel System (Persistent) ---
         self.main_container = ctk.CTkFrame(self, corner_radius=15, fg_color=BG, border_width=0)
         self.main_container.grid(row=0, column=1, padx=15, pady=15, sticky="nsew")
-        
+
         self.off_frame = ctk.CTkFrame(self.main_container, fg_color="transparent")
         self.aeg_frame = ctk.CTkFrame(self.main_container, fg_color="transparent")
-        
+
         self._build_offensive_view()
         self._build_aegis_view()
-        
+
         self.show_offensive()
         self._refresh_loop()
-        
+        self._drain_log_queue()
+
         self.ctrl.on_protection_alert = lambda m: self.log_tactical(m, "danger")
         self.log_tactical("[SYSTEM: ONLINE]", "success")
 
@@ -70,25 +85,57 @@ class Dashboard(ctk.CTk):
         self.sidebar.grid(row=0, column=0, sticky="nsew")
         self.sidebar.grid_rowconfigure(4, weight=1)
 
-        ctk.CTkLabel(self.sidebar, text="🔱 HAKAI v3", font=FONT_TITLE, text_color=ACCENT).pack(pady=(40, 20))
-        
-        self.btn_sword = ctk.CTkButton(self.sidebar, text="⚔️  OFFENSIVE", font=FONT_HEADER,
-                                      fg_color=SEL, text_color=TEXT, hover_color=SEL,
-                                      anchor="w", height=45, command=self.show_offensive)
+        ctk.CTkLabel(self.sidebar, text="🔱 HAKAI v3", font=FONT_TITLE, text_color=ACCENT).pack(
+            pady=(40, 20)
+        )
+
+        self.btn_sword = ctk.CTkButton(
+            self.sidebar,
+            text="⚔️  OFFENSIVE",
+            font=FONT_HEADER,
+            fg_color=SEL,
+            text_color=TEXT,
+            hover_color=SEL,
+            anchor="w",
+            height=45,
+            command=self.show_offensive,
+        )
         self.btn_sword.pack(fill="x", padx=20, pady=5)
 
-        self.btn_aegis = ctk.CTkButton(self.sidebar, text="🛡️  AEGIS (SAFE)", font=FONT_HEADER,
-                                      fg_color="transparent", text_color=TEXT, hover_color=SEL,
-                                      anchor="w", height=45, command=self.show_aegis)
+        self.btn_aegis = ctk.CTkButton(
+            self.sidebar,
+            text="🛡️  AEGIS (SAFE)",
+            font=FONT_HEADER,
+            fg_color="transparent",
+            text_color=TEXT,
+            hover_color=SEL,
+            anchor="w",
+            height=45,
+            command=self.show_aegis,
+        )
         self.btn_aegis.pack(fill="x", padx=20, pady=5)
 
-        self.btn_protect = ctk.CTkButton(self.sidebar, text="🛡  PROTECTION", font=FONT_HEADER,
-                                         fg_color="transparent", text_color=TEXT, hover_color=SEL,
-                                         anchor="w", height=45, command=self._open_protection)
+        self.btn_protect = ctk.CTkButton(
+            self.sidebar,
+            text="🛡  PROTECTION",
+            font=FONT_HEADER,
+            fg_color="transparent",
+            text_color=TEXT,
+            hover_color=SEL,
+            anchor="w",
+            height=45,
+            command=self._open_protection,
+        )
         self.btn_protect.pack(fill="x", padx=20, pady=5)
 
-        self.status_box = ctk.CTkTextbox(self.sidebar, height=180, width=200,
-                                         font=(FONT_MONO[0], 10), fg_color="#000", border_width=0)
+        self.status_box = ctk.CTkTextbox(
+            self.sidebar,
+            height=180,
+            width=200,
+            font=(FONT_MONO[0], 10),
+            fg_color="#000",
+            border_width=0,
+        )
         self.status_box.pack(side="bottom", pady=20, padx=15)
 
     # ── View Persistence ────────────────────────────────────────────────────
@@ -111,26 +158,77 @@ class Dashboard(ctk.CTk):
         bar = ctk.CTkFrame(self.off_frame, height=60, fg_color=PANEL, corner_radius=10)
         bar.pack(fill="x", padx=10, pady=10)
 
-        ctk.CTkButton(bar, text="⟳ SCAN", width=100, fg_color=ACCENT, text_color=BG,
-                      font=FONT_SMALL, command=self._start_scan).pack(side="left", padx=10)
+        ctk.CTkButton(
+            bar,
+            text="⟳ SCAN",
+            width=100,
+            fg_color=ACCENT,
+            text_color=BG,
+            font=FONT_SMALL,
+            command=self._start_scan,
+        ).pack(side="left", padx=10)
 
         self.sel_lbl = ctk.CTkLabel(bar, text="NO SELECTION", font=FONT_SMALL, text_color=MUTED)
         self.sel_lbl.pack(side="left", padx=10)
 
-        ctk.CTkButton(bar, text="✕ CLEAR", width=60, fg_color="transparent", text_color=MUTED, border_width=1, border_color=MUTED,
-                      font=FONT_SMALL, command=self._cmd_clear_sel).pack(side="left", padx=5)
+        ctk.CTkButton(
+            bar,
+            text="✕ CLEAR",
+            width=60,
+            fg_color="transparent",
+            text_color=MUTED,
+            border_width=1,
+            border_color=MUTED,
+            font=FONT_SMALL,
+            command=self._cmd_clear_sel,
+        ).pack(side="left", padx=5)
 
         # Right-side action buttons
-        ctk.CTkButton(bar, text="✕ CUT", width=80, fg_color=RED, text_color=BG,
-                      font=FONT_SMALL, command=self._cmd_cut).pack(side="right", padx=5)
-        ctk.CTkButton(bar, text="↺ RESTORE", width=90, fg_color=GREEN, text_color=BG,
-                      font=FONT_SMALL, command=self._cmd_restore).pack(side="right", padx=5)
-        ctk.CTkButton(bar, text="⚡ LIMIT", width=80, fg_color=GOLD, text_color=BG,
-                      font=FONT_SMALL, command=self._cmd_limit).pack(side="right", padx=5)
-        ctk.CTkButton(bar, text="∞ UNLIMIT", width=90, fg_color=TEAL, text_color=BG,
-                      font=FONT_SMALL, command=self._cmd_unlimit).pack(side="right", padx=5)
-        ctk.CTkButton(bar, text="✏️ RENAME", width=90, fg_color=BLUE, text_color=BG,
-                      font=FONT_SMALL, command=self._cmd_rename).pack(side="right", padx=5)
+        ctk.CTkButton(
+            bar,
+            text="✕ CUT",
+            width=80,
+            fg_color=RED,
+            text_color=BG,
+            font=FONT_SMALL,
+            command=self._cmd_cut,
+        ).pack(side="right", padx=5)
+        ctk.CTkButton(
+            bar,
+            text="↺ RESTORE",
+            width=90,
+            fg_color=GREEN,
+            text_color=BG,
+            font=FONT_SMALL,
+            command=self._cmd_restore,
+        ).pack(side="right", padx=5)
+        ctk.CTkButton(
+            bar,
+            text="⚡ LIMIT",
+            width=80,
+            fg_color=GOLD,
+            text_color=BG,
+            font=FONT_SMALL,
+            command=self._cmd_limit,
+        ).pack(side="right", padx=5)
+        ctk.CTkButton(
+            bar,
+            text="∞ UNLIMIT",
+            width=90,
+            fg_color=TEAL,
+            text_color=BG,
+            font=FONT_SMALL,
+            command=self._cmd_unlimit,
+        ).pack(side="right", padx=5)
+        ctk.CTkButton(
+            bar,
+            text="✏️ RENAME",
+            width=90,
+            fg_color=BLUE,
+            text_color=BG,
+            font=FONT_SMALL,
+            command=self._cmd_rename,
+        ).pack(side="right", padx=5)
 
         # --- Table & Intel Split ---
         content_split = ctk.CTkFrame(self.off_frame, fg_color="transparent")
@@ -138,58 +236,96 @@ class Dashboard(ctk.CTk):
 
         table_wrap = ctk.CTkScrollableFrame(content_split, fg_color=BG)
         table_wrap.pack(side="left", fill="both", expand=True, padx=(10, 5), pady=5)
-        
+
         # Target Intel Sidebar
         self.intel_frame = ctk.CTkFrame(content_split, width=280, fg_color=PANEL, corner_radius=15)
         self.intel_frame.pack(side="right", fill="y", padx=(5, 10), pady=10)
         self.intel_frame.pack_propagate(False)
 
-        ctk.CTkLabel(self.intel_frame, text="🛰️ TARGET INTEL", font=FONT_HEADER, text_color=ACCENT).pack(pady=20)
-        
-        self.intel_brand = ctk.CTkLabel(self.intel_frame, text="[BRAND: —]", font=FONT_SMALL, text_color=MUTED, anchor="w")
+        ctk.CTkLabel(
+            self.intel_frame, text="🛰️ TARGET INTEL", font=FONT_HEADER, text_color=ACCENT
+        ).pack(pady=20)
+
+        self.intel_brand = ctk.CTkLabel(
+            self.intel_frame, text="[BRAND: —]", font=FONT_SMALL, text_color=MUTED, anchor="w"
+        )
         self.intel_brand.pack(fill="x", padx=20, pady=5)
-        
-        self.intel_os = ctk.CTkLabel(self.intel_frame, text="[OS: SCANNING]", font=FONT_SMALL, text_color=MUTED, anchor="w")
+
+        self.intel_os = ctk.CTkLabel(
+            self.intel_frame, text="[OS: SCANNING]", font=FONT_SMALL, text_color=MUTED, anchor="w"
+        )
         self.intel_os.pack(fill="x", padx=20, pady=5)
-        
-        self.intel_name = ctk.CTkLabel(self.intel_frame, text="[NAME: HIDDEN]", font=FONT_SMALL, text_color=MUTED, anchor="w")
+
+        self.intel_name = ctk.CTkLabel(
+            self.intel_frame, text="[NAME: HIDDEN]", font=FONT_SMALL, text_color=MUTED, anchor="w"
+        )
         self.intel_name.pack(fill="x", padx=20, pady=5)
 
         h_row = ctk.CTkFrame(table_wrap, fg_color=PANEL, height=35)
         h_row.pack(fill="x", pady=(0, 5))
         for txt, w in COLS:
-            ctk.CTkLabel(h_row, text=txt, width=w, font=FONT_SMALL, text_color=MUTED, anchor="w").pack(side="left", padx=5)
+            ctk.CTkLabel(
+                h_row, text=txt, width=w, font=FONT_SMALL, text_color=MUTED, anchor="w"
+            ).pack(side="left", padx=5)
 
         self.table_container = table_wrap
 
     # ── Aegis Construction ──────────────────────────────────────────────────
 
     def _build_aegis_view(self):
-        header = ctk.CTkLabel(self.aeg_frame, text="🛡️ SOVEREIGN AEGIS CONFIGURATION", font=FONT_HEADER, text_color=ACCENT)
+        header = ctk.CTkLabel(
+            self.aeg_frame,
+            text="🛡️ SOVEREIGN AEGIS CONFIGURATION",
+            font=FONT_HEADER,
+            text_color=ACCENT,
+        )
         header.pack(pady=30)
 
         grid = ctk.CTkFrame(self.aeg_frame, fg_color="transparent")
         grid.pack(expand=True, fill="both", padx=40)
 
-        self._create_card(grid, "GHOST FIREWALL", "Invisible to Probes", 
-                         self.ctrl.firewall.active, self._toggle_ghost).grid(row=0, column=0, padx=15, pady=15)
-        
-        self._create_card(grid, "ARP SELF-HEALING", "Lock Gateway", 
-                         self.ctrl.protector.arp_guard_enabled, self._toggle_arp).grid(row=0, column=1, padx=15, pady=15)
+        self._create_card(
+            grid,
+            "GHOST FIREWALL",
+            "Invisible to Probes",
+            self.ctrl.firewall.active,
+            self._toggle_ghost,
+        ).grid(row=0, column=0, padx=15, pady=15)
 
-        self._create_card(grid, "CHAMELEON ENGINE", "Signature Evasion", 
-                         False, self._toggle_chameleon).grid(row=1, column=0, padx=15, pady=15)
+        self._create_card(
+            grid,
+            "ARP SELF-HEALING",
+            "Lock Gateway",
+            self.ctrl.protector.arp_guard_enabled,
+            self._toggle_arp,
+        ).grid(row=0, column=1, padx=15, pady=15)
 
-        self._create_card(grid, "IPv6 DARK SECTOR", "RA + DHCPv6 Spoof", 
-                         False, self._toggle_ipv6).grid(row=1, column=1, padx=15, pady=15)
+        self._create_card(
+            grid, "CHAMELEON ENGINE", "Signature Evasion", False, self._toggle_chameleon
+        ).grid(row=1, column=0, padx=15, pady=15)
+
+        self._create_card(
+            grid, "IPv6 DARK SECTOR", "RA + DHCPv6 Spoof", False, self._toggle_ipv6
+        ).grid(row=1, column=1, padx=15, pady=15)
 
         # Nuclear Ghost Master Switch
-        nuclear_frame = ctk.CTkFrame(grid, fg_color=SEL, corner_radius=15, border_width=2, border_color=ACCENT)
+        nuclear_frame = ctk.CTkFrame(
+            grid, fg_color=SEL, corner_radius=15, border_width=2, border_color=ACCENT
+        )
         nuclear_frame.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=15, pady=15)
-        ctk.CTkLabel(nuclear_frame, text="☢️ NUCLEAR GHOST", font=FONT_HEADER, text_color=ACCENT).pack(pady=(20, 5))
-        ctk.CTkLabel(nuclear_frame, text="TOTAL INVISIBILITY MODE", font=FONT_SMALL, text_color=TEXT).pack(pady=5)
-        self.nuclear_switch = ctk.CTkSwitch(nuclear_frame, text="ENGAGE", font=FONT_SMALL, 
-                                           progress_color=ACCENT, command=self._toggle_nuclear)
+        ctk.CTkLabel(
+            nuclear_frame, text="☢️ NUCLEAR GHOST", font=FONT_HEADER, text_color=ACCENT
+        ).pack(pady=(20, 5))
+        ctk.CTkLabel(
+            nuclear_frame, text="TOTAL INVISIBILITY MODE", font=FONT_SMALL, text_color=TEXT
+        ).pack(pady=5)
+        self.nuclear_switch = ctk.CTkSwitch(
+            nuclear_frame,
+            text="ENGAGE",
+            font=FONT_SMALL,
+            progress_color=ACCENT,
+            command=self._toggle_nuclear,
+        )
         self.nuclear_switch.pack(pady=20)
 
     def _create_card(self, master, title, desc, init_state, command):
@@ -198,7 +334,8 @@ class Dashboard(ctk.CTk):
         ctk.CTkLabel(card, text=title, font=FONT_HEADER).pack(pady=(25, 0))
         ctk.CTkLabel(card, text=desc, font=FONT_SMALL, text_color=MUTED).pack(pady=5)
         switch = ctk.CTkSwitch(card, text="ACTIVATE", progress_color=ACCENT, command=command)
-        if init_state: switch.select()
+        if init_state:
+            switch.select()
         switch.pack(pady=20)
         return card
 
@@ -241,7 +378,6 @@ class Dashboard(ctk.CTk):
 
         self.after(1200, self._refresh_loop)
 
-
     def _make_row(self, ip, dev, idx):
         bg = CARD if idx % 2 == 0 else BG
         row = ctk.CTkFrame(self.table_container, fg_color=bg, height=40, corner_radius=0)
@@ -251,8 +387,11 @@ class Dashboard(ctk.CTk):
         row.bind("<Double-Button-1>", lambda e, _ip=ip: self._open_info(_ip))
 
         lbls = {}
+
         def _lbl(txt, w, col=TEXT):
-            l = ctk.CTkLabel(row, text=str(txt), width=w, font=FONT_MONO, text_color=col, anchor="w")
+            l = ctk.CTkLabel(
+                row, text=str(txt), width=w, font=FONT_MONO, text_color=col, anchor="w"
+            )
             l.pack(side="left", padx=5)
             # Return "break" to stop the event from bubbling up to the row frame.
             l.bind("<Button-1>", lambda e, _ip=ip: (self._select(_ip, e), "break")[-1])
@@ -260,56 +399,101 @@ class Dashboard(ctk.CTk):
             return l
 
         lbls["dot"] = _lbl("●", 30, GREEN)
-        lbls["ip"]  = _lbl(ip, 140)
-        lbls["id"]  = _lbl(dev.identity or "Unknown", 320, TEAL)
-        lbls["hn"]  = _lbl(dev.hostname or "—", 180, ACCENT)
-        lbls["st"]  = _lbl("ONLINE", 120, GREEN)
-        lbls["tot"] = _lbl("0 B", 200, MUTED)
+        lbls["ip"] = _lbl(ip, 130)
+        lbls["id"] = _lbl(dev.identity or "Unknown", 240, TEAL)
+        lbls["hn"] = _lbl(dev.hostname or "—", 150, ACCENT)
+        lbls["st"] = _lbl("ONLINE", 110, GREEN)
+        lbls["live"] = _lbl("idle", 170, MUTED)
+        lbls["tot"] = _lbl("0 B", 160, MUTED)
 
         self._rows[ip] = {"frame": row, "labels": lbls, "idx": idx}
 
     def _update_row(self, ip):
-        rd = self._rows.get(ip); dev = self.ctrl.devices.get(ip)
-        if not rd or not dev: return
+        rd = self._rows.get(ip)
+        dev = self.ctrl.devices.get(ip)
+        if not rd or not dev:
+            return
 
         try:
-            if not rd["frame"].winfo_exists(): return
+            if not rd["frame"].winfo_exists():
+                return
 
             row_bg = SEL if ip in self._sel_ips else (CARD if rd["idx"] % 2 == 0 else BG)
             rd["frame"].configure(fg_color=row_bg)
             for lbl in rd["labels"].values():
-                if lbl.winfo_exists(): lbl.configure(fg_color=row_bg)
+                if lbl.winfo_exists():
+                    lbl.configure(fg_color=row_bg)
 
-            sess_rx, sess_tx  = self.ctrl.traffic.get_usage(ip)
-            mode              = self.ctrl.traffic.get_mode(ip)  # 'MITM' or 'PASSIVE'
+            sess_rx, sess_tx = self.ctrl.traffic.get_usage(ip)
+            mode = self.ctrl.traffic.get_mode(ip)  # 'MITM' or 'PASSIVE'
 
             rd["labels"]["id"].configure(text=dev.identity or "❓ Scanning...")
             rd["labels"]["hn"].configure(text=dev.hostname or "—")
 
             # ── Status: shows CUT / LIMIT / MITM / PASSIVE ───────────────
             if dev.cut:
-                status_txt, status_col = "🔒 CUT",              RED
+                status_txt, status_col = "🔒 CUT", RED
             elif dev.limited:
                 status_txt, status_col = f"⚡ {dev.limit_kb}KB", GOLD
             elif mode == "MITM":
-                status_txt, status_col = "◉ MITM",              GREEN
+                status_txt, status_col = "◉ MITM", GREEN
             else:
-                status_txt, status_col = "◌ PASSIVE",           AMBER
+                status_txt, status_col = "◌ PASSIVE", AMBER
 
             rd["labels"]["st"].configure(text=status_txt, text_color=status_col)
+
+            # ── Live speed — who is using bandwidth right now ─────────────
+            # rx_speed/tx_speed are Mbps, refreshed by update_device_speeds().
+            # Colour-code by intensity so a heavy user (streaming / downloading
+            # a movie) is obvious at a glance.
+            if dev.cut:
+                live_txt, live_col = "🔒 cut", MUTED
+            else:
+                busy = max(dev.rx_speed, dev.tx_speed)
+                if busy <= 0.0:
+                    live_txt, live_col = "idle", MUTED
+                else:
+                    live_txt = f"↓ {fmt_mbps(dev.rx_speed)}  ↑ {fmt_mbps(dev.tx_speed)}"
+                    if busy >= 3.0:
+                        live_col = RED  # heavy — movie / stream
+                    elif busy >= 0.5:
+                        live_col = GOLD  # moderate
+                    else:
+                        live_col = GREEN  # light
+            rd["labels"]["live"].configure(text=live_txt, text_color=live_col)
 
             # ── Total Usage ───────────────────────────────────────────────
             rd["labels"]["tot"].configure(text=f"↓ {fmt_total(sess_rx)}  ↑ {fmt_total(sess_tx)}")
 
-        except (ctk.TclError, KeyError, RuntimeError):
+        except (TclError, KeyError, RuntimeError):
             pass  # Widget likely destroyed during refresh
 
     # ── Command Proxies ─────────────────────────────────────────────────────
 
     def log_tactical(self, msg, type="info"):
-        ts = datetime.now().strftime("%H:%M")
-        self.status_box.insert("end", f"\n[{ts}] {msg}")
-        self.status_box.see("end")
+        """Thread-safe log entry point. Called from the UI thread AND from
+        background threads (scan/cut workers, protector sniffer via
+        on_protection_alert) — so it only enqueues; _drain_log_queue() does the
+        actual Tk write on the UI thread."""
+        self._log_queue.put((datetime.now().strftime("%H:%M"), str(msg)))
+
+    def _drain_log_queue(self):
+        """UI-thread loop: write queued log lines to the status box, then
+        reschedule. The only place that touches the Tk log widget."""
+        try:
+            while True:
+                ts, msg = self._log_queue.get_nowait()
+                try:
+                    self.status_box.insert("end", f"\n[{ts}] {msg}")
+                    self.status_box.see("end")
+                except (TclError, RuntimeError):
+                    pass
+        except queue.Empty:
+            pass
+        try:
+            self.after(200, self._drain_log_queue)
+        except (TclError, RuntimeError):
+            pass
 
     def _start_scan(self):
         self.log_tactical("INITIATING SCAN...", "info")
@@ -323,7 +507,7 @@ class Dashboard(ctk.CTk):
 
     def _select(self, ip, event=None):
         multi = False
-        if event and hasattr(event, 'state'):
+        if event and hasattr(event, "state"):
             if event.state & 0x0004 or event.state & 0x0001:  # Ctrl or Shift
                 multi = True
 
@@ -339,18 +523,28 @@ class Dashboard(ctk.CTk):
             else:
                 self._sel_ips.add(ip)
 
-        self.sel_lbl.configure(text=f"{len(self._sel_ips)} SELECTED" if self._sel_ips else "NO SELECTION")
-        
+        self.sel_lbl.configure(
+            text=f"{len(self._sel_ips)} SELECTED" if self._sel_ips else "NO SELECTION"
+        )
+
         # Update all rows since selection changed
         for r_ip in list(self._rows.keys()):
             self._update_row(r_ip)
-        
+
         # Update Intel Panel for the most recently selected device
         dev = self.ctrl.devices.get(ip)
         if dev:
-            self.intel_brand.configure(text=f"[BRAND: {dev.vendor or '—'}]", text_color=GOLD if dev.vendor else MUTED)
-            self.intel_os.configure(text=f"[OS: {dev.os_guess or 'SCANNING'}]", text_color=TEAL if dev.os_guess else MUTED)
-            self.intel_name.configure(text=f"[NAME: {dev.hostname or 'HIDDEN'}]", text_color=BLUE if dev.hostname else MUTED)
+            self.intel_brand.configure(
+                text=f"[BRAND: {dev.vendor or '—'}]", text_color=GOLD if dev.vendor else MUTED
+            )
+            self.intel_os.configure(
+                text=f"[OS: {dev.os_guess or 'SCANNING'}]",
+                text_color=TEAL if dev.os_guess else MUTED,
+            )
+            self.intel_name.configure(
+                text=f"[NAME: {dev.hostname or 'HIDDEN'}]",
+                text_color=BLUE if dev.hostname else MUTED,
+            )
             self.log_tactical(f"[INTEL: {ip} UNMASKED]", "info")
 
     def _cmd_cut(self):
@@ -368,11 +562,11 @@ class Dashboard(ctk.CTk):
             self.log_tactical("No device selected — click a row first.", "warn")
             return
         # Show dialog for the first IP; extra_ips are the rest
-        ip      = ips[0]
-        dev     = self.ctrl.devices.get(ip)
+        ip = ips[0]
+        dev = self.ctrl.devices.get(ip)
         if not dev:
             return
-        extra   = ips[1:]
+        extra = ips[1:]
 
         def _apply(target_ip, kb):
             # Apply to the device shown in the dialog
@@ -403,16 +597,27 @@ class Dashboard(ctk.CTk):
             return
         ip = ips[0]
         dev = self.ctrl.devices.get(ip)
-        if not dev: return
+        if not dev:
+            return
         if not dev.mac:
             self.log_tactical(f"Cannot rename {ip} — MAC address not resolved yet.", "warn")
             return
-            
-        new_name = simpledialog.askstring("Rename Device", f"Enter custom nickname for {ip}\n(Leave blank to clear):", initialvalue=dev.nickname or "", parent=self)
+
+        new_name = simpledialog.askstring(
+            "Rename Device",
+            f"Enter custom nickname for {ip}\n(Leave blank to clear):",
+            initialvalue=dev.nickname or "",
+            parent=self,
+        )
         if new_name is not None:
             dev.nickname = new_name.strip()
-            dev.identity = "" # Force re-classification to update UI immediately
-            self.log_tactical(f"Renamed {ip} to '{dev.nickname}'" if dev.nickname else f"Cleared nickname for {ip}", "info")
+            dev.identity = ""  # Force re-classification to update UI immediately
+            self.log_tactical(
+                f"Renamed {ip} to '{dev.nickname}'"
+                if dev.nickname
+                else f"Cleared nickname for {ip}",
+                "info",
+            )
             self._update_row(ip)
 
     def _open_info(self, ip):
@@ -420,8 +625,9 @@ class Dashboard(ctk.CTk):
         dev = self.ctrl.devices.get(ip)
         if not dev:
             return
-        show_info_dialog(self, ip, dev, self.ctrl,
-                         fingerprint_done_cb=lambda i, d: self._update_row(i))
+        show_info_dialog(
+            self, ip, dev, self.ctrl, fingerprint_done_cb=lambda i, d: self._update_row(i)
+        )
 
     def _open_protection(self):
         """Open the Protection & Stealth modal."""
@@ -435,22 +641,33 @@ class Dashboard(ctk.CTk):
         else:
             self.log_tactical("SHIELDS DISENGAGED: IDENTITY RESTORED", "info")
 
-    def _toggle_ghost(self): self.ctrl.toggle_ghost_firewall(not self.ctrl.firewall.active, log=self.log_tactical)
-    def _toggle_arp(self): 
-        if self.ctrl.protector.arp_guard_enabled: self.ctrl.protector.disable_arp_guard(log=self.log_tactical)
-        else: self.ctrl.protector.enable_arp_guard(log=self.log_tactical)
+    def _toggle_ghost(self):
+        self.ctrl.toggle_ghost_firewall(not self.ctrl.firewall.active, log=self.log_tactical)
+
+    def _toggle_arp(self):
+        if self.ctrl.protector.arp_guard_enabled:
+            self.ctrl.protector.disable_arp_guard(log=self.log_tactical)
+        else:
+            self.ctrl.protector.enable_arp_guard(log=self.log_tactical)
+
     def _toggle_chameleon(self):
         # Check current state via MTU
         import subprocess
-        res = subprocess.run(["ip", "link", "show", self.ctrl.net.iface], capture_output=True, text=True)
+
+        res = subprocess.run(
+            ["ip", "link", "show", self.ctrl.net.iface], capture_output=True, text=True
+        )
         is_active = "mtu 1492" in res.stdout
         self.ctrl.toggle_chameleon(not is_active, log=self.log_tactical)
+
     def _toggle_ipv6(self):
         # Toggle based on the hijacker's current running state so the switch
         # can turn the feature off as well as on.
         new_state = not self.ctrl.ipv6._running
         self.ctrl.toggle_ipv6_hijack(new_state, log=self.log_tactical)
-    def _on_ttl_change(self, v): self.ctrl.toggle_stack_masquerade(v > 100, log=self.log_tactical)
+
+    def _on_ttl_change(self, v):
+        self.ctrl.toggle_stack_masquerade(v > 100, log=self.log_tactical)
 
     def on_close(self):
         self.ctrl.stop()
