@@ -1122,6 +1122,36 @@ that a real NIC's MAC/hostname/nft table actually revert (root + Linux + manual)
 
 ---
 
+## Verification — 2026-11-20 (Phase 8, stealth batch)
+
+Full gates after the `system/stealth.py` batch. Passed pre-commit (p2.md); p8
+confirms, nothing new.
+
+### Quality gates (actual output)
+
+| Gate | Result | Evidence |
+|------|--------|----------|
+| `pytest -v` | **82 passed** in 0.40s (2 new stealth) | unit + mocked (patched subprocess) |
+| `ruff check .` | **All checks passed** | static |
+| `ruff format --check .` | 19 would reformat / 50 clean — all 19 **pre-existing WIP** (count 20→19); my 2 files → **already formatted** | static |
+| `mypy .` | **Success: no issues in 54 source files** | static |
+
+### Functional checks (actual output)
+
+| Check | Result | Evidence |
+|-------|--------|----------|
+| **Imports** | **29/29** modules import cleanly | integration (import-level), Linux, non-root |
+| **Restoration / cleanup** | `disengage_stealth` with a failing `hostnamectl` → MAC restore **attempted** (True), nft-table removal **attempted** (True), status `[IDENTITY RESTORE INCOMPLETE]` + logged; all-OK → `[IDENTITY RESTORED]` | **mocked/unit** — real MAC/hostname/nft revert on a NIC is **root-required + Linux + manual** |
+| **Shutdown** | `controller.stop()` calls `disengage_stealth` only when `stealth_active`, inside its isolated try (CTL-1) | mocked/unit |
+| **Config / UI** | unchanged this batch | — |
+
+### Not verified (honest gaps)
+- No real MAC spoof/un-spoof, hostname change, or nft table on a live host — the
+  verified behaviour is the restore **control flow + truthful status**.
+- The cloak (`engage_mirage_cloak`) was intentionally not modified or exercised.
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, mdns batch)
 
 Full gates after the `network/mdns_sniff.py` batch. Passed pre-commit (p2.md);
