@@ -957,6 +957,61 @@ interface exercised (needs root + a monitor-capable NIC + a lab).
 
 ---
 
+### `network/xdp_engine.py` — RESOLVED (3 fixed) + 1 documented
+
+*Offensive drop layer — cleanup/validation only, not drop effectiveness.*
+
+| ID | Sev | Location | Status |
+|----|-----|----------|--------|
+| XDP-1 | Medium | `unload()` | **Fixed** |
+| XDP-2 | Low | `add_drop` / `remove_drop` | **Fixed** |
+| XDP-5 | Low | `load()` partial failure | **Fixed** |
+| XDP-3 | Low | swallowed map errors | Fixed (now logged) |
+
+**XDP-1 — `unload()` not crash-safe → XDP program left on the NIC.** It called
+`self._bpf.remove_xdp(self.iface, 0)` unwrapped and set `_loaded=False`
+*afterwards*. If `remove_xdp` raised (bcc error, iface gone), the exception
+propagated and `_loaded` stayed True — the XDP program remained attached to the
+interface and `unload()` was not idempotent (a second call would retry the
+raising detach). *Fix:* wrap `remove_xdp` in `try/except` with a `finally` that
+always sets `_loaded=False` and `_bpf=None`, logging the failure (noting the
+program may remain attached). `controller.stop()`'s per-step isolation (CTL-1)
+already contained the propagation; this makes the engine itself safe/idempotent.
+*Regression:* `test_unload_is_safe_and_idempotent_when_remove_raises`,
+`test_unload_clears_state_on_success`.
+
+**XDP-2 — Lenient key parsing.** `add_drop`/`remove_drop` built the eBPF `__be32`
+map key with `socket.inet_aton`, which accepts non-dotted-quad forms (`"1.2.3"`
+→ `0x01020003`), producing a key that never matches real packet IPs (a silent
+no-op drop). *Fix:* `_key()` uses `ipaddress.IPv4Address(ip).packed`, rejecting
+anything that isn't a proper dotted-quad IPv4 and logging the rejection.
+*Regression:* `test_add_drop_rejects_non_dotted_quad`,
+`test_add_drop_valid_ipv4_uses_packed_key`.
+
+**XDP-5 — Half-built BPF on load failure.** `load()` left `self._bpf` set if
+`attach_xdp` failed after the program loaded. *Fix:* reset `_bpf=None`/
+`_loaded=False` in the `except`.
+
+**XDP-3 — Swallowed errors now logged.** `add_drop`'s map-set failure (e.g. the
+256-entry map full) was silently swallowed; it now logs a warning (the real cut
+is still backed by iptables + ARP).
+
+**Clean:** Windows degrades honestly — `load()` returns False when bcc is absent,
+and every op guards on `_loaded`, so nothing fakes success. `add_drop` ×257 is
+the only functional limit (map `max_entries` 256), documented not fixed.
+
+Verification (xdp batch, per updated p2.md):
+per-file `ruff`/`mypy` on **src + test**, then full gates — `pytest -v`
+→ **78 passed** (+5); `ruff check .` → clean; `ruff format --check` my 2 files →
+clean (pre-existing WIP still dirty, not mine); `mypy .` → no issues (52 files).
+No newly-introduced error at commit time.
+
+**Limits (xdp):** verified with a **fake BPF object** (dict-backed map, a
+`remove_xdp` that raises on demand) — no real eBPF program, kernel attach, or
+packet drop is exercised (needs root + BCC/clang + kernel headers + a lab NIC).
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, deauth batch)
 
 Full gates after the `network/deauth.py` batch. This batch already passed the

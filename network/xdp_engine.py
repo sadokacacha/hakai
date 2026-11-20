@@ -5,7 +5,11 @@ Drops packets at the NIC driver level (RX path) for zero-CPU "Cuts."
 This bypasses the entire Linux networking stack (iptables/nftables).
 """
 
+import ipaddress
+import logging
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 # The eBPF C program to be loaded into the NIC.
 XDP_PROGRAM_C = r"""
@@ -51,6 +55,7 @@ int hakai_xdp_drop(struct xdp_md *ctx) {
 char _license[] SEC("license") = "GPL";
 """
 
+
 class XDPEngine:
     def __init__(self, iface: str):
         self.iface = iface
@@ -61,36 +66,63 @@ class XDPEngine:
         """Loads the XDP program using BCC (if installed)."""
         try:
             from bcc import BPF
+
             self._bpf = BPF(text=XDP_PROGRAM_C)
             fn = self._bpf.load_func("hakai_xdp_drop", BPF.XDP)
             self._bpf.attach_xdp(self.iface, fn, 0)
             self._loaded = True
             return True
         except Exception:
-            # Fallback: explain that BCC/clang is required for XDP
+            # Fallback: BCC/clang is required for XDP. Don't keep a half-built
+            # BPF reference around on failure.
+            self._bpf = None
+            self._loaded = False
             return False
 
-    def add_drop(self, ip: str):
-        if not self._loaded: return
-        import socket
-        import struct
+    @staticmethod
+    def _key(ip: str) -> bytes | None:
+        """Network-byte-order 4-byte key for the eBPF __be32 map, or None if the
+        IP isn't a valid dotted-quad IPv4 (socket.inet_aton accepts short forms
+        like '1.2.3' and would produce a wrong key that never matches traffic)."""
         try:
-            # key must be in network byte order (big-endian) for the eBPF code
-            key = socket.inet_aton(ip)
+            return ipaddress.IPv4Address(ip).packed
+        except (ipaddress.AddressValueError, ValueError):
+            return None
+
+    def add_drop(self, ip: str):
+        if not self._loaded:
+            return
+        key = self._key(ip)
+        if key is None:
+            _log.warning("xdp: refusing to drop invalid IPv4 %r", ip)
+            return
+        import struct
+
+        try:
             self._bpf["drop_ips"][key] = struct.pack("B", 1)
-        except Exception:
-            pass
+        except Exception as e:
+            _log.warning("xdp: failed to add drop for %s: %s", ip, e)
 
     def remove_drop(self, ip: str):
-        if not self._loaded: return
-        import socket
+        if not self._loaded:
+            return
+        key = self._key(ip)
+        if key is None:
+            return
         try:
-            key = socket.inet_aton(ip)
             del self._bpf["drop_ips"][key]
         except Exception:
             pass
 
     def unload(self):
-        if self._loaded and self._bpf:
+        if not (self._loaded and self._bpf):
+            return
+        try:
             self._bpf.remove_xdp(self.iface, 0)
+        except Exception as e:
+            _log.warning("xdp: remove_xdp failed, program may remain attached: %s", e)
+        finally:
+            # Clear state regardless, so unload is idempotent and a failed
+            # detach can't wedge _loaded True.
             self._loaded = False
+            self._bpf = None
