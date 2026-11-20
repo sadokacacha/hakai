@@ -2148,11 +2148,25 @@ best-effort-degraded (current). Recommend deciding that first; the single
 `osutil.IS_WINDOWS` is now the one place to implement it. This is the one proposed
 item I judged **risk > value to force now** — documented rather than rushed.
 
-**P4-6 — UI work on the Tk thread (tracked from Phase 2).** `ui/protection_panel`
-toggles + `controller` evasion toggles run subprocesses synchronously on the Tk
-thread (PP-1/DASH-2/STEALTH-6). *Fix:* offload handlers to worker threads and
-marshal widget-state refresh back via `after` (the log path is already
-thread-safe after DASH-1). A focused UI-threading batch.
+**P4-6 — UI work on the Tk thread. DONE for the dashboard; protection_panel
+residual documented.** *Problem:* the dashboard's engine toggles (`_toggle_nuclear`
+/`_toggle_ghost`/`_toggle_arp`/`_toggle_chameleon`/`_toggle_ipv6`/`_on_ttl_change`)
+and the protection-panel toggles run ip/nft/sysctl subprocesses **synchronously
+on the Tk thread**, freezing the UI for seconds (DASH-2/STEALTH-6; PP-1 for the
+modal). *Done (dashboard):* new `ui/async_util.run_async(func)` offloads the work
+to a daemon thread; each of the 6 dashboard handlers reads any Tk *widget* state
+(e.g. `nuclear_switch.get()`) on the UI thread first, then offloads the
+subprocess/controller work — logging flows through the already-thread-safe
+`log_tactical` (DASH-1), and none of these handlers write widgets afterwards, so
+no back-marshalling is needed. *Regression:* `test_async_util` (asserts the work
+is scheduled on a daemon thread, not run on the caller). *Residual (deferred),
+PP-1:* `ui/protection_panel`'s modal handlers still call their toggles
+synchronously, and its `update_btns()` interleaves subprocess state-reads with Tk
+widget writes — offloading that cleanly needs a focused modal rework (the reads
+threaded, the widget writes marshalled via `after`), which I did not rush into a
+Tk-closure file without a test seam. The main-window freeze — the one users hit
+most — is fixed. *Verification:* `pytest` **116 passed** (+1), `ruff`/`mypy` clean
+(68 files).
 
 ### Not changed (deliberately)
 

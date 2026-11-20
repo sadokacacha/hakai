@@ -14,6 +14,7 @@ from tkinter import TclError, simpledialog
 import customtkinter as ctk
 
 from core.persistence import classify_device, fmt_mbps, fmt_total
+from ui.async_util import run_async
 from ui.info_dialog import show_info_dialog
 from ui.limit_dialog import show_limit_dialog
 from ui.protection_panel import show_protection_panel
@@ -633,41 +634,65 @@ class Dashboard(ctk.CTk):
         """Open the Protection & Stealth modal."""
         show_protection_panel(self, self.ctrl, self.log_tactical)
 
+    # These toggles call controller methods that run ip/nft/sysctl subprocesses
+    # synchronously; run them off the Tk thread so the UI doesn't freeze (P4-6).
+    # Any Tk widget state is read here on the UI thread, then handed to the worker.
+
     def _toggle_nuclear(self):
-        state = self.nuclear_switch.get()
-        status = self.ctrl.toggle_nuclear_stealth(state, log=self.log_tactical)
-        if state:
-            self.log_tactical(f"CLOAK ENGAGED: {status}", "atk")
-        else:
-            self.log_tactical("SHIELDS DISENGAGED: IDENTITY RESTORED", "info")
+        state = self.nuclear_switch.get()  # Tk widget read — UI thread
+
+        def _work():
+            status = self.ctrl.toggle_nuclear_stealth(state, log=self.log_tactical)
+            if state:
+                self.log_tactical(f"CLOAK ENGAGED: {status}", "atk")
+            else:
+                self.log_tactical("SHIELDS DISENGAGED: IDENTITY RESTORED", "info")
+
+        run_async(_work, name="toggle_nuclear")
 
     def _toggle_ghost(self):
-        self.ctrl.toggle_ghost_firewall(not self.ctrl.firewall.active, log=self.log_tactical)
+        run_async(
+            lambda: self.ctrl.toggle_ghost_firewall(
+                not self.ctrl.firewall.active, log=self.log_tactical
+            ),
+            name="toggle_ghost",
+        )
 
     def _toggle_arp(self):
-        if self.ctrl.protector.arp_guard_enabled:
-            self.ctrl.protector.disable_arp_guard(log=self.log_tactical)
-        else:
-            self.ctrl.protector.enable_arp_guard(log=self.log_tactical)
+        def _work():
+            if self.ctrl.protector.arp_guard_enabled:
+                self.ctrl.protector.disable_arp_guard(log=self.log_tactical)
+            else:
+                self.ctrl.protector.enable_arp_guard(log=self.log_tactical)
+
+        run_async(_work, name="toggle_arp")
 
     def _toggle_chameleon(self):
-        # Check current state via MTU
-        import subprocess
+        def _work():
+            import subprocess
 
-        res = subprocess.run(
-            ["ip", "link", "show", self.ctrl.net.iface], capture_output=True, text=True
-        )
-        is_active = "mtu 1492" in res.stdout
-        self.ctrl.toggle_chameleon(not is_active, log=self.log_tactical)
+            res = subprocess.run(
+                ["ip", "link", "show", self.ctrl.net.iface], capture_output=True, text=True
+            )
+            is_active = "mtu 1492" in res.stdout
+            self.ctrl.toggle_chameleon(not is_active, log=self.log_tactical)
+
+        run_async(_work, name="toggle_chameleon")
 
     def _toggle_ipv6(self):
         # Toggle based on the hijacker's current running state so the switch
         # can turn the feature off as well as on.
         new_state = not self.ctrl.ipv6._running
-        self.ctrl.toggle_ipv6_hijack(new_state, log=self.log_tactical)
+        run_async(
+            lambda: self.ctrl.toggle_ipv6_hijack(new_state, log=self.log_tactical),
+            name="toggle_ipv6",
+        )
 
     def _on_ttl_change(self, v):
-        self.ctrl.toggle_stack_masquerade(v > 100, log=self.log_tactical)
+        run_async(
+            lambda: self.ctrl.toggle_stack_masquerade(v > 100, log=self.log_tactical),
+            name="toggle_ttl",
+        )
 
     def on_close(self):
         self.ctrl.stop()
