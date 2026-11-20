@@ -904,6 +904,59 @@ route — that needs a root Linux host + an IPv6 lab, unavailable here.
 
 ---
 
+### `network/deauth.py` — RESOLVED (2 fixed) + 3 documented
+
+*Offensive module — these are lifecycle/state-management fixes, not deauth
+effectiveness.*
+
+| ID | Sev | Location | Status |
+|----|-----|----------|--------|
+| DEAUTH-1 | Medium | `_pmf_loop` / `start_pmf_bypass` | **Fixed** |
+| DEAUTH-2 | Low-Med | `start_pmf_bypass` | **Fixed** |
+| DEAUTH-3 | Low | `_enable_monitor` dead code | Documented |
+| DEAUTH-5 | Low | `_stops` / `stop(ip)` vestigial | Documented |
+| DEAUTH-6 | Low | `DEAUTH_INTERVAL`/`BURST_COUNT` unused | Documented |
+
+**DEAUTH-1 — Worker dies after first drain and never restarts.** `_pmf_loop`
+did `while self._running: … if not targets: break` but never set `_running =
+False` on that break. After `stop_pmf_bypass` emptied `_targets`, the thread
+exited with `_running` still True, so `start_pmf_bypass`'s `if not self._running`
+guard never spawned a new worker — **deauth silently stopped working for the rest
+of the session.** *Fix:* the loop now marks `_running = False` under the lock
+when targets drain (and returns), `start_pmf_bypass` decides start/running
+atomically under the lock, and `stop_all` sets `_running = False` to stop the
+loop promptly. *Regression:* `test_pmf_loop_resets_running_when_no_targets`,
+`test_start_pmf_bypass_restarts_after_drain`.
+
+**DEAUTH-2 — `start_pmf_bypass` ignored `_active`.** It guarded on iface/bssid
+but not `SCAPY_WIFI_OK`, so with scapy's `Dot11` layer unavailable it spawned a
+worker that immediately crashed building `RadioTap()/Dot11()` (both `None`),
+leaving `_running` stale-True. *Fix:* early `if not self._active: return`.
+*Regression:* `test_start_pmf_bypass_noop_when_scapy_wifi_unavailable`.
+
+**DEAUTH-3/5/6 (documented) — Dead/vestigial.** `_enable_monitor` is never
+called (the loop assumes the iface is already in monitor mode); the `_stops`
+dict is never populated so `stop(ip)` is a no-op (the real per-target stop is
+`stop_pmf_bypass(target_mac)`, which `arp.restore` also calls); `DEAUTH_INTERVAL`
+and `BURST_COUNT` are unused (the loop hardcodes `count=5` and `time.sleep(1)`).
+Removal candidates for Phase 4/7; left in place (cross-file callers).
+
+**Clean:** MAC/BSSID inputs go into scapy Dot11 frames, not subprocess (no
+address-to-command concern); packet-send is wrapped in try/except; threads are
+daemon; `_active`/`is_available` correctly reflects scapy+bssid+iface.
+
+Verification (deauth batch, per updated p2.md):
+per-file `ruff`/`mypy` on **src + test**, then full gates — `pytest -v`
+→ **73 passed** (+3); `ruff check .` → clean; `ruff format --check .` → 22
+pre-existing WIP would reformat, **my 2 files clean**; `mypy .` → no issues
+(51 files). No newly-introduced error at commit time.
+
+**Limits (deauth):** lifecycle fixes verified with a stubbed `threading.Thread`
+and a synchronous `_pmf_loop` call — no real 802.11 frames sent, no monitor-mode
+interface exercised (needs root + a monitor-capable NIC + a lab).
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, ipv6 batch)
 
 Full gates after the `network/ipv6.py` batch. Labelled by evidence type. **A

