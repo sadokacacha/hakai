@@ -62,20 +62,3 @@ class Device:
         if len(self.rx_history) > 30:
             self.rx_history.pop(0)
             self.tx_history.pop(0)
-
-    # ── Serialisation ──────────────────────────────────────────────────────
-    def to_state(self) -> dict:
-        return {
-            "cut":        self.cut,
-            "limited":    self.limited,
-            "limit_kb":   self.limit_kb,
-            "open_ports": self.open_ports,
-            "os_guess":   self.os_guess,
-            "vendor":     self.vendor,
-            "hostname":   self.hostname,
-            "mac":        self.mac,
-            "services":   {str(k): v for k, v in self.services.items()},
-            "identity":   self.identity,
-            "confidence": self.confidence,
-            "recon":      self.recon_data,
-        }

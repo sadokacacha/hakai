@@ -24,6 +24,7 @@ class Protector:
 
         self.arp_guard_enabled = False
         self.kill_switch_enabled = False
+        self._killswitch_tripped = False  # True once the DROP is in place (idempotency)
         self.gateway_mac = ""
 
         # Reputation Tracking: IP -> { 'arp_count': int, 'macs': set, 'status': str, 'last_reset': float }
@@ -179,6 +180,7 @@ class Protector:
 
     def disable_kill_switch(self, log=None):
         self.kill_switch_enabled = False
+        self._killswitch_tripped = False
         if not _IS_WINDOWS:
             # Remove every copy of our own marked rule (Linux only); repeated
             # triggers can insert duplicates, so delete until none remain.
@@ -202,8 +204,20 @@ class Protector:
         if log:
             log("🚨 Kill-Switch DISARMED", "info")
 
-    def _trigger_kill_switch(self):
-        """Emergency network shutdown."""
+    def _trigger_kill_switch(self) -> bool:
+        """Emergency defensive shutdown: drop our own outbound traffic and KEEP
+        it dropped until the operator disarms (toggle off → disable_kill_switch).
+
+        Returns True only on the transition into the tripped state, so the sentry
+        (which calls this on every spoofed ARP packet) inserts the DROP exactly
+        once and alerts once. Previously this also called self.ctrl.stop(), whose
+        teardown runs disable_kill_switch() and removed the very DROP just
+        inserted — so a detected hijack stopped everything but did NOT cut the
+        network, the opposite of the armed promise (P7 #23).
+        """
+        if self._killswitch_tripped:
+            return False
+        self._killswitch_tripped = True
         if not _IS_WINDOWS:
             # Marked so disable_kill_switch removes exactly our rule(s).
             subprocess.run(
@@ -221,8 +235,7 @@ class Protector:
                 ],
                 capture_output=True,
             )
-        self.ctrl.stop()  # Stop all operations
-        # We don't log here directly to avoid threading issues, the monitor will handle it
+        return True
 
     # ── Monitor Loop ─────────────────────────────────────────────────────────
 
@@ -274,9 +287,10 @@ class Protector:
                         self.enable_arp_guard()
                         self.ctrl.on_protection_alert("🛡️ SELF-HEALING: Gateway lock re-applied!")
 
-                    if self.kill_switch_enabled:
-                        self._trigger_kill_switch()
-                        self.ctrl.on_protection_alert("🚨 KILL-SWITCH TRIGGERED: NETWORK SHUTDOWN")
+                    if self.kill_switch_enabled and self._trigger_kill_switch():
+                        self.ctrl.on_protection_alert(
+                            "🚨 KILL-SWITCH TRIGGERED: outbound traffic dropped until disarm"
+                        )
 
         # Restart sniff automatically if the interface glitches or raises an exception
         while self._running:

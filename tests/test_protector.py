@@ -95,3 +95,71 @@ def test_enable_arp_guard_rejects_invalid_gateway(monkeypatch):
     monkeypatch.setattr(prot_mod.subprocess, "run", lambda *a, **k: calls.append(a) or _cp(0))
     assert prot.enable_arp_guard() is False
     assert calls == [], "no ip neigh command may run for an invalid gateway"
+
+
+# ── P7 #23: Kill-switch must leave the DROP in place, not self-undo ───────────
+
+
+class _KillCtrl:
+    """Controller stub that records whether stop() was called."""
+
+    def __init__(self, gateway="192.168.1.1"):
+        self.net = _Net(gateway)
+        self.stopped = False
+
+    def stop(self):
+        self.stopped = True
+
+
+def _record_run(calls):
+    def _run(cmd, *a, **k):
+        calls.append(list(cmd))
+        # iptables -D (delete) returns 1 so disable_kill_switch's loop stops after one try.
+        return _cp(1 if "-D" in cmd else 0)
+
+    return _run
+
+
+def test_kill_switch_trigger_inserts_drop_and_does_not_stop(monkeypatch):
+    ctrl = _KillCtrl()
+    prot = Protector(ctrl)
+    calls: list = []
+    monkeypatch.setattr(prot_mod.subprocess, "run", _record_run(calls))
+    monkeypatch.setattr(prot_mod, "_IS_WINDOWS", False)
+
+    first = prot._trigger_kill_switch()
+
+    assert first is True
+    assert prot._killswitch_tripped is True
+    assert ctrl.stopped is False, "trigger must NOT call ctrl.stop() — that removed the DROP"
+    inserts = [c for c in calls if "-I" in c and "hakai_killswitch" in c]
+    assert len(inserts) == 1, "exactly one OUTPUT DROP inserted"
+
+
+def test_kill_switch_trigger_is_idempotent(monkeypatch):
+    prot = Protector(_KillCtrl())
+    calls: list = []
+    monkeypatch.setattr(prot_mod.subprocess, "run", _record_run(calls))
+    monkeypatch.setattr(prot_mod, "_IS_WINDOWS", False)
+
+    assert prot._trigger_kill_switch() is True
+    assert prot._trigger_kill_switch() is False, "second trigger must not re-insert the DROP"
+    inserts = [c for c in calls if "-I" in c and "hakai_killswitch" in c]
+    assert len(inserts) == 1, "sentry fires per-packet; the DROP must be inserted only once"
+
+
+def test_disable_kill_switch_resets_trip_and_removes_rule(monkeypatch):
+    prot = Protector(_KillCtrl())
+    calls: list = []
+    monkeypatch.setattr(prot_mod.subprocess, "run", _record_run(calls))
+    monkeypatch.setattr(prot_mod, "_IS_WINDOWS", False)
+
+    prot._trigger_kill_switch()
+    prot.disable_kill_switch()
+
+    assert prot._killswitch_tripped is False
+    assert prot.kill_switch_enabled is False
+    deletes = [c for c in calls if "-D" in c and "hakai_killswitch" in c]
+    assert len(deletes) >= 1, "disable must remove the hakai_killswitch DROP"
+    # After a disarm the switch can trip again.
+    assert prot._trigger_kill_switch() is True

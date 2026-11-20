@@ -2741,3 +2741,89 @@ product decision. The INVESTIGATE/REBUILD items above are documented and left fo
 the user — they touch offensive features or change user-facing behavior, which the
 "reliability only / don't improve offensive effectiveness / check purpose first"
 scope reserves for an explicit decision.
+
+---
+
+# Phase 7 — Feature Review, re-run — 2026-11-20 (verdicts implemented)
+
+Second pass. Reachability re-grepped against current code (post P4 + PP-1): the
+25-feature inventory in §7.1 still holds — FEAT-1's `_on_ttl_change` is gone,
+items #21/#22 (`toggle_dns_spoof`, `monitor_device`) still have no app caller,
+#23 kill-switch still reachable via `protection_panel`, #24 `state.json` still
+write-only. This pass **implements** the open non-KEEP verdicts that are in
+reliability scope, with the operator's direction on the two that change product
+behavior.
+
+## 7.4 Re-reviewed non-KEEP features (what it does / works / reachable / value / deps / failure modes / verdict)
+
+| # | Feature | Reachable | Works | Value | Dependencies | Failure mode | Verdict (this pass) |
+|---|---------|-----------|-------|-------|--------------|--------------|---------------------|
+| 23 | **Kill-switch** — on a detected gateway ARP-spoof, drop our own outbound traffic | yes (panel `toggle_kill_switch`; sentry `_trigger_kill_switch`) | **was NO** — inserted an OUTPUT DROP then called `ctrl.stop()`, whose teardown (`protector.stop → disable_kill_switch`) removed that exact DROP | high (defensive dead-man switch) | `iptables OUTPUT`, the ARP sentry, `ctrl.stop` | self-undo (never cut); and per-packet re-trigger could stack duplicate rules | **REBUILD → DONE** (fix-to-persist) |
+| 24 | **Device-state persistence** (`state.json`) | written (ctrl:90, ctrl:560) | write-only — `self.state` loaded but never read | low (latent "restore cut/limited on restart") | `persistence._save`, `Device.to_state` | silently writes a file nothing consumes; misleads maintenance | **INVESTIGATE → DONE** (stop writing) |
+| 21 | **DNS spoof** (`toggle_dns_spoof`) | **no** app caller (start path); stop path runs from restore | manager + NAT-restore sound | offensive (DNS redirect) | `DnsSpoofManager`, iptables NAT | unreachable start path | **INVESTIGATE → defer to `/wire`** (not removed) |
+| 22 | **Monitor device** (`monitor_device`) | **no** app caller | intact (ARP-spoof-to-intercept, no drop) | offensive (silent MITM) | `arp`, controller | unreachable | **INVESTIGATE → defer to `/wire`** (not removed) |
+
+**#21/#22 — why defer, not remove.** "Unreachable ≠ removable — check purpose
+first": `.claude/commands/wire.md` is explicit project intent — *"Wire the dormant
+interception features to reachable UI entry points… these already exist — this is
+reachability, not new capability. Targets: `monitor_device` and
+`toggle_dns_spoof`."* So the purpose is real and the chosen disposition is wiring
+(its own `/wire` phase, with lab-only authorization + mocked tests), **not**
+removal and **not** wiring inside p7. Left reachable-by-restore-only, documented.
+
+## 7.5 Implemented this batch (severity order)
+
+**#23 Kill-switch — REBUILD, fix-to-persist (operator-chosen). Severity: high.**
+`core/protector.py`. Root cause: `_trigger_kill_switch` inserted the
+`hakai_killswitch` OUTPUT DROP and then called `self.ctrl.stop()`; `ctrl.stop()`
+runs `protector.stop()` → `disable_kill_switch()`, which deletes every
+`hakai_killswitch` rule — so a detected hijack stopped all ops but left the
+network **uncut**, the opposite of the "Network will drop on hijack detection"
+label (PROT-3 / P7 #23). Fix:
+- Removed the `self.ctrl.stop()` call — the protective DROP now persists until the
+  operator disarms (panel toggle off → `disable_kill_switch` removes it; app exit
+  also disarms via `protector.stop`, so quitting is the escape hatch).
+- Added an idempotency guard `self._killswitch_tripped` (set on trip, cleared in
+  `disable_kill_switch`). The sentry calls `_trigger_kill_switch` on **every**
+  spoofed ARP packet; without the old `ctrl.stop()` halting the sniff, the DROP
+  would otherwise be re-inserted per packet. `_trigger_kill_switch` now returns
+  `True` only on the trip transition, and the sentry alert fires once, not per
+  packet.
+- Behavior change (intended, operator-approved): after a trigger, outbound
+  traffic stays dropped until manual disarm.
+- Tests (`tests/test_protector.py`, +3): trigger inserts exactly one DROP and does
+  **not** call `ctrl.stop()`; second trigger is a no-op (no duplicate rule);
+  `disable_kill_switch` clears the trip flag and removes the rule, after which it
+  can trip again.
+
+**#24 `state.json` — INVESTIGATE, stop-writing (operator-chosen). Severity: low.**
+Removed the write-only device-state persistence (nothing ever read it back):
+- `core/controller.py` — dropped `db.save_state(self.devices)` from
+  `save_state()`; the method keeps the **used** `db.save_config(iface, gateway)`
+  write (config.json *is* read back) + optional log. (Method name left as-is;
+  renaming is a P5 concern.)
+- `core/persistence.py` — removed `Persistence.save_state`, the unused
+  `self.state = _load(STATE_FILE, {})` load, and the now-orphaned `STATE_FILE`
+  constant.
+- `core/device.py` — removed `Device.to_state()` (used only by the deleted write
+  path). *Grep proof:* no live refs to `to_state`/`db.save_state`/`STATE_FILE`/
+  `self.state` remain (only the explanatory comment at controller:560).
+- No new test (pure removal); covered by the full-suite green + import smoke.
+
+### Verification (P8, actual output)
+
+| Gate | Result |
+|------|--------|
+| `pytest tests/test_protector.py -q` | **9 passed** (incl. +3 kill-switch) |
+| `pytest -q` (full) | **122 passed** (+3 since P7 FEAT-1's 119) |
+| `ruff check .` | **All checks passed** |
+| `ruff format --check .` | **8** would reformat — all pre-existing WIP (incl. `device.py`, CRLF debt at HEAD per `git show`); my 5 changed files add **no** new debt (count unchanged 8→8) |
+| `mypy .` | **Success: no issues in 69 source files** |
+| imports | `core.{controller,persistence,device,protector}` import OK |
+
+### Not verified (honest gaps)
+- The kill-switch trip/disarm is unit-tested with `subprocess.run` mocked; the
+  **real** `iptables OUTPUT DROP` persistence on a detected gateway-spoof needs a
+  live lab box (ARP sentry + a spoofer) — a `manual-verify` item. No real network
+  was cut in this environment.
+- #21/#22 remain unreachable by design until `/wire`.

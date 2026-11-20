@@ -18,7 +18,6 @@ _log = logging.getLogger(__name__)
 # ── Storage paths ──────────────────────────────────────────────────────────────
 CONFIG_DIR = Path.home() / ".sadok_hakai"
 CONFIG_FILE = CONFIG_DIR / "config.json"
-STATE_FILE = CONFIG_DIR / "state.json"
 NICK_FILE = CONFIG_DIR / "nicknames.json"
 try:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -78,7 +77,6 @@ class Persistence:
         self._lock = threading.Lock()
         self.cfg = _load(CONFIG_FILE, dict(DEFAULT_CFG))
         self.nicknames = _load(NICK_FILE, {})
-        self.state = _load(STATE_FILE, {})
 
     def save_config(self, iface: str = "", gateway: str = ""):
         with self._lock:
@@ -87,12 +85,6 @@ class Persistence:
             if gateway:
                 self.cfg["gateway"] = gateway
             _save(CONFIG_FILE, dict(self.cfg))
-
-    def save_state(self, devices: dict):
-        # Snapshot first so a concurrent device-dict mutation can't change the
-        # size mid-serialization.
-        data = {ip: dev.to_state() for ip, dev in list(devices.items())}
-        _save(STATE_FILE, data)
 
     def get_nickname(self, mac: str) -> str:
         return self.nicknames.get(mac, "")

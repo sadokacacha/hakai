@@ -557,7 +557,9 @@ class Controller:
     # ── State persistence ─────────────────────────────────────────────────────
 
     def save_state(self, iface="", gateway="", log=None):
-        db.save_state(self.devices)
+        # Persists iface/gateway to config.json. Device-state (state.json) was
+        # write-only — nothing ever read it back — so that write was removed
+        # (P7 #24); only the live config persistence remains.
         db.save_config(iface=iface or self.net.iface, gateway=gateway or self.net.gateway)
         if log:
             log("💾 State saved.", "ok")
