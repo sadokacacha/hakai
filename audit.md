@@ -1180,6 +1180,63 @@ bandwidth is shaped (root + Linux + lab + manual).
 
 ---
 
+### `system/masquerade.py` — RESOLVED (2 fixed) + 2 documented
+
+*Evasion module. The mimic apply (`_engage`) is kept functionally identical; only
+the disable path (`_restore` — un-masquerade, the safe direction) is fixed.*
+
+| ID | Sev | Location | Status |
+|----|-----|----------|--------|
+| MASQ-2 | Medium | disable restore loop | **Fixed** |
+| MASQ-3 | Low | disable status | **Fixed** |
+| MASQ-1 | Low | capture rc not checked | Documented |
+| MASQ-6 | Low | Windows | Documented (honest, not fake) |
+
+**Good (pre-existing):** this module **already captures the originals before
+mutating** (`_ORIG` filled from `sysctl -n` on first engage), so the capture-
+before-mutate principle is satisfied here.
+
+**MASQ-2 — Partial restore on failure.** Enable and disable shared one
+`for key,value in settings.items(): sysctl -w … check=True` loop. On disable, a
+single failing restore raised (check=True) and **aborted the remaining restores**,
+leaving the host partially masqueraded (e.g. TTL back to original but timestamps
+still `0`). Same class as STEALTH-1/NET-1. *Fix:* split into `_engage()`
+(unchanged evasion apply) and `_restore()`, which writes each captured original
+in its own isolated `try`, checks the return code, and logs. *Regression:*
+`test_restore_isolates_failures_and_reports_truthfully`.
+
+**MASQ-3 — Untruthful restore status.** Disable returned `[DNA: NATIVE]` (or a
+raised `[ERROR …]`) regardless of partial success. *Fix:* `_restore()` returns
+`[DNA: NATIVE]` only when every captured original restored, else
+`[DNA: RESTORE INCOMPLETE]`; `[DNA: NATIVE]` when nothing was ever masqueraded.
+*Regression:* `test_restore_reports_native_when_all_ok`,
+`test_restore_noop_when_nothing_captured`, and the INCOMPLETE assertion above.
+
+**MASQ-1 (documented) — Capture rc not checked.** `_engage` reads originals with
+`sysctl -n` but doesn't check the return code; a failed read stores `""`, and
+`_restore` skips empty values (so that key is never restored — left at the mimic
+value). Rare on a normal host (all three keys exist); the engage path is evasion
+and intentionally not hardened further.
+
+**MASQ-6 (documented) — Windows.** No `_IS_WINDOWS` guard, but `sysctl` raising
+`FileNotFoundError` is caught and returns `[ERROR: STACK_SPOOF_FAIL …]` — this
+module **errors honestly** on Windows rather than fake-succeeding (unlike
+IPT-win/TC-win).
+
+**Not touched (scope):** `_engage` — the Windows-mimic apply — is byte-for-byte
+the original enable branch (`test_engage_still_applies_mimic_values` pins it).
+
+Verification (masquerade batch, per updated p2.md):
+per-file `ruff`/`mypy` on **src + test**, then full gates — `pytest -v`
+→ **91 passed** (+4); `ruff check .` → clean; `ruff format --check` my 2 files →
+clean; `mypy .` → no issues (56 files).
+
+**Limits (masquerade):** restore isolation/status proven against a mocked
+`subprocess` — not that the real kernel sysctls actually revert (root + Linux +
+manual).
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, tc batch)
 
 Full gates after the `system/tc_manager.py` batch. Passed pre-commit (p2.md);
