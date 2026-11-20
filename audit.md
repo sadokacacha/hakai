@@ -2508,3 +2508,97 @@ ruff check .              # clean (rule set pinned in pyproject.toml)
 mypy .                    # Success: no issues found in 39 source files
 ruff format --check .     # reports 35-file format debt — intentionally not enforced
 ```
+
+---
+
+# Phase 7 — Feature Review (feature-level verdicts)
+
+Scope recap: **reliability & quality only.** Fix crashes/leaks; do *not* improve
+offensive/evasion effectiveness; "unreachable ≠ removable — check purpose first."
+Reachability below is grepped, not assumed (UI `command=`, `.bind`, Aegis-card
+positional callbacks, controller call-sites).
+
+## 7.1 Verdict table
+
+| # | Feature | Entry (reachable?) | Works? | Value | Verdict |
+|---|---------|--------------------|--------|-------|---------|
+| 1 | Network scan / discovery (nmap + ARP + passive mDNS/SSDP/NBNS/DHCP) | SCAN button → `_start_scan` ✓ | yes (parsers unit-tested) | core | **KEEP** |
+| 2 | Device identity / OUI classification | auto on scan ✓ | yes (P4-2 dual-dict OUI) | core | **KEEP** |
+| 3 | Cut device (ARP + iptables acct + XDP + deauth) | CUT → `_cmd_cut` ✓ | yes (ARP-1 race fixed) | core (the product) | **KEEP** |
+| 4 | Restore device | RESTORE → `_cmd_restore` ✓ | yes (restore hardened) | core | **KEEP** |
+| 5 | Bandwidth limit / unlimit (tc HTB) | LIMIT/UNLIMIT ✓ | yes (tc restore hardened) | high | **KEEP** |
+| 6 | Rename / nickname | RENAME → `_cmd_rename` ✓ | yes (atomic persist) | medium | **KEEP** |
+| 7 | ARP guard (anti-spoof) | Protection panel + Aegis card ✓ | yes (hardened) | high (defensive) | **KEEP** |
+| 8 | Self-healing sentry (re-pin gateway) | auto with ARP guard ✓ | yes (hardened) | high (defensive) | **KEEP** |
+| 9 | Ghost firewall (nft stealth-drop) | Aegis card `_toggle_ghost` ✓ | yes (restore verified) | medium (defensive) | **KEEP** |
+| 10 | Stack masquerade (sysctl TTL) | Protection panel:118 ✓ | yes (sysctl restore) | medium (evasion) | **KEEP** |
+| 11 | Chameleon engine (MTU/MSS) | Aegis card `_toggle_chameleon` ✓ | yes | medium (evasion) | **KEEP** |
+| 12 | Nuclear stealth (combo) | Aegis switch `_toggle_nuclear` ✓ | yes | medium (evasion) | **KEEP** |
+| 13 | Mirage cloak (MAC/hostname spoof) | Protection panel ✓ | yes (restore verified) | medium (evasion) | **KEEP** |
+| 14 | IPv6 hijack (RA + DHCPv6) | Aegis card `_toggle_ipv6` ✓ | yes (withdrawal RA on stop) | medium (offensive) | **KEEP** (as-is) |
+| 15 | WiFi deauth | wired into cut when WiFi ✓ | yes (DEAUTH-1 lifecycle) | medium (offensive) | **KEEP** (as-is) |
+| 16 | XDP/eBPF drop | part of cut ✓ | yes (graceful BCC-absent) | medium | **KEEP** |
+| 17 | Device info dialog (ping/traceroute/reset) | double-click → `_open_info` ✓ | yes (marshalled) | medium | **KEEP** |
+| 18 | Fingerprint (nmap -O -sV) | info dialog + auto ✓ | yes (`_parse_nmap` pure) | medium | **KEEP** |
+| 19 | Traffic accounting (live/total) | table column ✓ | yes (counters hardened) | medium | **KEEP** |
+| 20 | Static IP config (nmcli) | Protection panel ✓ | yes (validated) | low (admin) | **KEEP** |
+| 21 | **DNS spoof** | `toggle_dns_spoof` has **no caller** ✗ | start path unreachable; stop path wired into restore | offensive | **INVESTIGATE** |
+| 22 | **Monitor device** (ARP-spoof w/o drop) | `monitor_device` has **no UI caller** ✗ | code intact, no invocation | offensive (MITM intercept) | **INVESTIGATE** |
+| 23 | **Kill-switch** (PROT-3) | Protection panel ✓ | **no** — self-undoes | defensive | **REBUILD** |
+| 24 | **Device-state persistence** (`state.json`) | written at ctrl:90 & ctrl:560; `db.state` **never read** ✗ | write-only | low | **INVESTIGATE** |
+| 25 | **Dashboard TTL handler** `_on_ttl_change` | **no widget, no bind, no caller** ✗ | dead; feature lives at protection_panel:118 | none | **REMOVE** |
+
+## 7.2 Detail on the non-KEEP verdicts
+
+**#25 `_on_ttl_change` — REMOVE (implemented this batch; see §7.3).**
+Defined at `ui/dashboard.py:691`, wired to nothing (no `command=`, no `.bind`, no
+call-site). The masquerade feature it would toggle is independently reachable at
+`protection_panel.py:118`, so removing the handler orphans nothing. It is the one
+clearly-safe, in-scope deletion: dead UI glue, not an engine capability. Note it
+was wrapped in `run_async` during P4-6 — i.e. P4-6 threaded dead code; this
+removes that artifact too.
+
+**#21 DNS spoof — INVESTIGATE (not actioned; product decision).**
+`controller.toggle_dns_spoof` has no UI caller, so the *start* path is
+unreachable; only `dns.stop_spoof` runs (harmlessly) from restore/stop. Purpose
+is real (DNS-redirect MITM) and the manager + iptables NAT restore logic is
+sound. Two coherent resolutions, both the user's call: (a) wire a guarded UI
+control, or (b) remove `DnsSpoofManager` + `controller.dns` to shed unreachable
+offensive surface. **Not touched** — adding reach would "improve offensive
+effectiveness"; removal is a product decision. Left reachable-by-restore-only.
+
+**#22 Monitor device — INVESTIGATE (not actioned; product decision).**
+`controller.monitor_device` (ARP-spoof-to-intercept without the drop half) has no
+UI caller. Same shape as #21: intact offensive code, no entry point. Keep
+documented; wiring or removal is the user's product call, not a reliability fix.
+
+**#23 Kill-switch — REBUILD (not actioned; product decision + behavior change).**
+PROT-3 (recorded in Phase 2): `_trigger_kill_switch` inserts a FORWARD DROP then
+calls `ctrl.stop()`, whose teardown runs `disable_kill_switch` and *removes the
+DROP it just inserted*. Net effect on a detected hijack: everything stops and the
+network is **not** cut — the opposite of the armed promise. It genuinely does not
+work. The fix is coherent (don't call `ctrl.stop()` from the trigger; leave the
+protective DROP in place until manual disarm) but it is a **user-facing behavior
+change** (leaves the operator's traffic dropped) on a defensive feature — a
+product decision, flagged not forced. Recommended: Option A (persist the DROP,
+manual disarm) to match the "network will drop on detection" label.
+
+**#24 `state.json` — INVESTIGATE (not actioned).**
+`db.save_state(self.devices)` writes `state.json` (ctrl:90 with an empty device
+map at startup, ctrl:560 on explicit save), and `Persistence.__init__` loads
+`self.state` (persistence.py:81) — but `self.state`/`db.state` is **never read**
+anywhere. So the device-state half of persistence is write-only (config/nickname
+persistence is separate and *is* used — keep it). Resolution is either "hydrate
+cut/limited state on startup" (a feature) or "stop writing the unused file" (a
+cleanup); both change behavior slightly. Low severity, left for a decision.
+
+## 7.3 Implemented this batch
+
+**FEAT-1 (severity: low) — remove dead `_on_ttl_change` handler.**
+`ui/dashboard.py` — deleted the unreferenced `_on_ttl_change` method (verdict #25).
+No feature lost (masquerade stays reachable via `protection_panel.py:118`); no
+test referenced it. This is the only #7 verdict that is safe, in-scope, and not a
+product decision. The INVESTIGATE/REBUILD items above are documented and left for
+the user — they touch offensive features or change user-facing behavior, which the
+"reliability only / don't improve offensive effectiveness / check purpose first"
+scope reserves for an explicit decision.

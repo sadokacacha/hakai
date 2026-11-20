@@ -688,12 +688,6 @@ class Dashboard(ctk.CTk):
             name="toggle_ipv6",
         )
 
-    def _on_ttl_change(self, v):
-        run_async(
-            lambda: self.ctrl.toggle_stack_masquerade(v > 100, log=self.log_tactical),
-            name="toggle_ttl",
-        )
-
     def on_close(self):
         self.ctrl.stop()
         self.destroy()
