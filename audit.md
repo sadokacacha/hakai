@@ -1629,6 +1629,38 @@ clean, `mypy .` clean (63 files), confirming the three files need no fix.
 
 ---
 
+## Verification — 2026-11-20 (Phase 8, sweep: oui_lookup/device/limit_dialog/protection_panel)
+
+Full gates after the 4-file review (no code changed — this confirms the three
+clean files and that nothing regressed).
+
+### Quality gates (actual output)
+
+| Gate | Result | Evidence |
+|------|--------|----------|
+| `pytest -v` | **114 passed** in 0.39s | unit + mocked |
+| `ruff check .` | **All checks passed** | static |
+| `ruff format --check .` | 10 would reformat / 68 clean — all 10 **pre-existing WIP** (count 13→10 as the ui/network batches landed); nothing new | static |
+| `mypy .` | **Success: no issues in 63 source files** | static |
+
+### Functional checks (actual output)
+
+| Check | Result | Evidence |
+|-------|--------|----------|
+| **Imports** | **29/29** modules import cleanly | integration (import-level), Linux, non-root |
+| **oui_lookup robustness** | `get_vendor("")` → "Unknown Device"; `get_vendor("a")` → "Unknown Device"; `is_randomized("aa:bb:…")` → True | unit (pure function) |
+| **device model** | 35 `update_history` calls → `rx_history`/`tx_history` both capped at 30 (in sync); `to_state()` has the expected keys | unit |
+| **limit_dialog / protection_panel** | not exercised (Tk closures, no display) | — (manual) |
+
+### Not verified (honest gaps)
+- `limit_dialog`/`protection_panel` are Tk-closure UIs with no unit seam — their
+  input-validation (limit_dialog, verified by inspection + prior test) and the
+  PP-1 UI-blocking are not exercised against a live Tk event loop (manual).
+- No code changed this batch, so there is nothing new to verify beyond "the three
+  clean files behave and the suite is unregressed."
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, firewall_apex batch)
 
 Full gates after the `system/firewall_apex.py` batch. Passed pre-commit (p2.md);
