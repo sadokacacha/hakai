@@ -217,10 +217,14 @@ class Protector:
         """
         if self._killswitch_tripped:
             return False
-        self._killswitch_tripped = True
-        if not _IS_WINDOWS:
-            # Marked so disable_kill_switch removes exactly our rule(s).
-            subprocess.run(
+        if _IS_WINDOWS:
+            # The OUTPUT DROP is Linux-only; don't claim the network is cut when
+            # nothing was done (the caller would otherwise alert "traffic dropped").
+            _log.warning("kill-switch: OUTPUT DROP unsupported on this platform; not armed")
+            return False
+        # Marked so disable_kill_switch removes exactly our rule(s).
+        try:
+            r = subprocess.run(
                 [
                     "iptables",
                     "-I",
@@ -235,6 +239,14 @@ class Protector:
                 ],
                 capture_output=True,
             )
+        except (OSError, subprocess.SubprocessError) as e:
+            _log.error("kill-switch: failed to insert OUTPUT DROP: %s", e)
+            return False
+        if r.returncode != 0:
+            # Report the truth: the drop did NOT go in, so we are not armed.
+            _log.error("kill-switch: iptables insert failed (rc=%s)", r.returncode)
+            return False
+        self._killswitch_tripped = True
         return True
 
     # ── Monitor Loop ─────────────────────────────────────────────────────────

@@ -2642,10 +2642,10 @@ These need a Linux host with root and cannot be exercised on the Windows audit b
 ## 5. How to verify
 
 ```
-pytest -v                 # 22 tests, all passing
+pytest -v                 # 136 tests, all passing (as of P9, 2026-11-20)
 ruff check .              # clean (rule set pinned in pyproject.toml)
-mypy .                    # Success: no issues found in 39 source files
-ruff format --check .     # reports 35-file format debt — intentionally not enforced
+mypy .                    # Success: no issues found in 72 source files
+ruff format --check .     # reports 8-file format debt — intentionally not enforced
 ```
 
 ---
@@ -2827,3 +2827,169 @@ Removed the write-only device-state persistence (nothing ever read it back):
   live lab box (ARP sentry + a spoofer) — a `manual-verify` item. No real network
   was cut in this environment.
 - #21/#22 remain unreachable by design until `/wire`.
+
+---
+
+# Phase 9 — Cold Release-Engineering Review — 2026-11-20
+
+Release-engineer pass over the whole `hakai-reliability` branch (51 commits vs
+`main`, 85 files, +10.8k/−4.2k). Three independent read-only review agents
+(lifecycle/restoration, reliability/error-paths, security/deps) fanned out; every
+finding below was re-verified against the code before any fix. **Not a zero-bug
+branch** — the review found 3 restoration release-blockers, a safety-feature
+truthfulness bug, and several truthful-state defects, all fixed this phase.
+
+## 9.1 Baseline / gates (actual output, HEAD after fixes)
+
+| Gate | Result |
+|------|--------|
+| `pytest -q` | **136 passed** (+14 this phase) |
+| `ruff check .` | All checks passed |
+| `ruff format --check .` | 8 would reformat — all pre-existing WIP debt (CRLF/aligned-constant style, incl. `device.py`, `main.py`); unchanged by this phase |
+| `mypy .` | Success, **72** source files |
+| `import main` (non-root) | exits "must run as root" — startup root-guard works |
+
+P7 confirmed closed (kill-switch #23 + state.json #24 done; #21/#22 correctly
+deferred to `/wire`, not marked complete). P8 current and green on HEAD.
+
+## 9.2 Architecture (verdict: sound, keep)
+
+`main → Controller → ~12 subsystems`; UI via method calls + thread-safe
+`log_tactical` queue + `on_protection_alert`. Layering core ← network ← system,
+no import cycles (leaves: `netutil`, `osutil`, `async_util`, `shutdown`).
+`Controller.stop()` is idempotent (guarded by `_stopped`), crash-isolated (each
+teardown step in its own try/except), and always reaches `restore_network`.
+Off-Tk-thread discipline verified clean by the reliability agent: every worker /
+`run_async` body / scapy `prn` callback marshals widget writes via `after`;
+`log_tactical` only enqueues, `_drain_log_queue` is the sole Tk writer.
+
+## 9.3 Dependency matrix
+
+| Dep | Floor | Installed | Used | Verdict |
+|-----|-------|-----------|------|---------|
+| scapy | ≥2.7.0 (GHSA-cq46 floor) | 2.8.0 | packet engine (15 sites) | KEEP |
+| customtkinter | ≥5.2.0 | 6.0.0 | dashboard only | KEEP (mixed tk/ctk — P6) |
+| Pillow | ≥11.0.0 (10.x CVE floor) | 13.0.0 | **one** icon resize (`dashboard.py:57`) | KEEP, droppable (P6) |
+| pytest/ruff/mypy | pinned as comments | 9.2.0/0.17.6/2.4.1 | dev gates | KEEP (not enforced by pip) |
+| mac-vendor-lookup, bcc | optional, try/except | absent here | OUI / XDP | KEEP (graceful) |
+
+Security audit: **no `shell=True`/shell strings/`os.system` anywhere**; config
+I/O is `json` + atomic temp-file `os.replace` (no pickle/eval/exec); no secrets
+or PII to disk/logs; network-derived IPs validated via `ipaddress`/`core.netutil`
+before reaching subprocess/scapy. No release-blocking security findings.
+
+## 9.4 Name decision
+
+Deferred — P5 (naming) has not run. No rename applied this phase.
+
+## 9.5 Bugs fixed this phase (verified)
+
+**RELEASE-BLOCKERS**
+
+1. **Evasion subsystems leaked on every normal close** — `Controller.stop()`'s
+   cleanup tuple omitted the three independently-toggleable evasion features, so a
+   window close (or crash) left host state behind:
+   - stack-masquerade sysctls (`ip_default_ttl=128`, `tcp_timestamps=0`, window
+     scaling),
+   - chameleon interface MTU=1492 + `mangle POSTROUTING TCPMSS` rule,
+   - ghost-firewall `inet hakai_stealth` nft **drop-policy** table (leaked when
+     enabled standalone, `stealth_active` false).
+   Fix: added three isolated teardown steps to `stop()`
+   (`masquerade.restore`/`chameleon.restore`/`firewall.stealth_off`). Each
+   self-guards: `masquerade._restore` already no-ops without captured originals;
+   `chameleon._restore` was hardened to **not guess MTU 1500** when nothing was
+   captured (also fixes a latent wrong-MTU bug on jumbo/VPN links); ghost
+   `toggle_stealth(False)` just deletes its own table. Tests:
+   `test_controller_stop.py` (+2), `test_chameleon.py` (+1).
+
+2. **No restore on Ctrl+C / `kill` / crash** — shutdown ran only via
+   `WM_DELETE_WINDOW → on_close → ctrl.stop()`. A `sudo python3 main.py` run
+   stopped with SIGINT/SIGTERM bypassed it, leaving `ip_forward=1`, iptables/nft/
+   tc rules, poisoned ARP and sysctl/MTU/MAC unrestored. Fix: new
+   `core/shutdown.install_shutdown_hooks(ctrl)` registers `atexit` + SIGINT +
+   SIGTERM → the idempotent `ctrl.stop()`; wired in `main.py` after `start()`.
+   Test: `test_shutdown.py` (+4).
+
+3. **Kill-switch lied about being armed** — `_trigger_kill_switch` returned
+   `True` (→ sentry alerts "outbound traffic dropped") without checking the
+   `iptables -I OUTPUT` returncode, and returned `True` on Windows where it does
+   nothing. Fix: only set `_killswitch_tripped`/return `True` when the insert
+   actually succeeds; on Windows or nonzero rc, log and return `False` (no false
+   alert). Tests: `test_protector.py` (+2).
+
+**TRUTHFUL-STATE (core product)**
+
+4. `cut_device` left a device showing 🔒 CUT / BLOCKED when the ARP cut failed —
+   now reverts `dev.cut/status` and the traffic cut-mark in the worker's failure
+   path. Tests: `test_controller_actions.py`.
+5. `limit_device` marked a device LIMITED even when `tc` shaping failed — now
+   only sets `dev.limited/limit_kb` when `tc.limit` succeeds.
+6. `toggle_nuclear_stealth` assigned an unchecked (possibly empty) MAC to
+   `self.net.my_mac` → later `None.lower()`/filter break in the traffic counter.
+   Now guarded (`if new_mac:`), mirroring `toggle_stealth`.
+
+**HYGIENE**
+
+7. Removed git-tracked `scratch/verify_fix.py` (shipped a `sudo iptables` call,
+   not imported by the app).
+8. Updated the stale audit §5 "How to verify" counts (22→136 tests, 39→72 files,
+   35→8 format-debt).
+
+## 9.6 Tests added
+
+`test_shutdown.py` (4), `test_controller_actions.py` (5: cut revert/keep, limit
+fail/ok, nuclear MAC guard), `test_controller_stop.py` (+2 evasion teardown),
+`test_protector.py` (+2 kill-switch truthfulness), `test_chameleon.py` (+1
+never-engaged MTU). 122 → **136**.
+
+## 9.7 Root / Linux / manual limits (unchanged, still required)
+
+All privileged behaviour is mocked in CI and needs a **Linux host + root + lab
+network**: full GUI launch against real nft/iptables/tc; ARP cut/restore cycle +
+watchdog handle-leak check; **the new SIGINT/SIGTERM restore path** (verify the
+host is clean after `kill`/Ctrl+C); the real kill-switch `OUTPUT DROP`
+persistence on a detected gateway-spoof; IPv6 RA/DHCPv6; WiFi deauth (monitor-mode
+NIC); real XDP/eBPF attach/detach (bcc+clang). No real network was cut/restored
+in this environment.
+
+## 9.8 Remaining issues (NOT fixed — not release-blockers; do not mark done)
+
+- **dns_spoof `start_spoof` returns True when the REDIRECT failed** (+ `toggle_
+  dns_spoof` discards the bool). Left for **`/wire`**, which owns this currently
+  unreachable feature and will wire + test it.
+- **Silent Windows no-ops** in `traffic._ipt_loop`/`_read_proc` and the protector
+  sentry (no log) — the engine is Linux-only; low priority, worth a one-line log.
+- **Kill-switch persists on crash** (by design: fail-closed). Tension with
+  "restore on crash" — a boot-time sweep for the `hakai_killswitch` comment rule
+  would resolve it; not implemented (borders on new capability).
+- **XDP program attached in `Controller.__init__`** (before `start()`), widening
+  the window where a crash leaves it attached. Moving to `start()` is a lifecycle
+  improvement deferred as higher-risk.
+- **~36 best-effort `except Exception: pass`** without logging (most notable:
+  `stealth.engage_mirage_cloak` can report CLOAKED silently). Broad cleanup,
+  deferred.
+- **Scanner module-level `ThreadPoolExecutor`s never `.shutdown()`** (process-
+  lifetime; low impact). `info_dialog.do_ping` has no timeout (worker can hang a
+  label). `recon_engine.get_ipv6_neighbor` returns an uncorrelated neighbor
+  (unused in classify).
+- **Coverage gaps:** `device.display_name/update_history`, `osutil`, `limit_dialog`
+  have no direct unit tests (low-risk pure/UI code).
+- **Pending phases:** P5 (naming), P6 (UI rebuild / Pillow drop / tk-ctk unify),
+  `/wire` (#21/#22 interception), P4-5(2) Windows-behaviour product decision.
+
+## 9.9 Unverified behaviour
+
+The un-freezing (P4-6/PP-1), the signal-restore path, the kill-switch DROP
+persistence, and all kernel/NIC/firewall teardown are verified **by construction +
+mocked unit tests**, not against a live Tk loop or real root networking. Manual
+lab verification (§9.7) remains the gate before tagging a release.
+
+## 9.10 Diff summary (this phase)
+
+`core/controller.py` (stop() evasion teardown; cut/limit truthful state; nuclear
+MAC guard), `core/protector.py` (kill-switch truthfulness), `core/shutdown.py`
+(new), `system/chameleon.py` (MTU guard), `main.py` (wire shutdown hooks),
+`audit.md` (§5 counts + this report); removed `scratch/verify_fix.py`; tests:
+`test_shutdown.py` + `test_controller_actions.py` new, `test_controller_stop.py`/
+`test_protector.py`/`test_chameleon.py` extended. No formatting churn buried any
+diff (format debt unchanged at 8).

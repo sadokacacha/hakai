@@ -98,6 +98,11 @@ def main():
         ctrl.arp.deauth_mgr = deauth_mgr
     ctrl.start()
 
+    # Restore network state on Ctrl+C / kill / interpreter exit, not only the
+    # GUI close button (WM_DELETE_WINDOW). ctrl.stop() is idempotent.
+    from core.shutdown import install_shutdown_hooks
+    install_shutdown_hooks(ctrl)
+
     # ── Sync vendor DB in background ──────────────────────────────────────────
     threading.Thread(target=sync_vendor_db_bg, daemon=True,
                      name="vendor_db_sync").start()

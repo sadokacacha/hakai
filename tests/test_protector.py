@@ -163,3 +163,27 @@ def test_disable_kill_switch_resets_trip_and_removes_rule(monkeypatch):
     assert len(deletes) >= 1, "disable must remove the hakai_killswitch DROP"
     # After a disarm the switch can trip again.
     assert prot._trigger_kill_switch() is True
+
+
+# ── P9: kill-switch must not claim "armed" unless the DROP actually went in ───
+
+
+def test_kill_switch_not_armed_when_insert_fails(monkeypatch):
+    prot = Protector(_KillCtrl())
+    monkeypatch.setattr(prot_mod, "_IS_WINDOWS", False)
+    # iptables -I returns nonzero (e.g. ruleset locked / non-root) → NOT armed.
+    monkeypatch.setattr(prot_mod.subprocess, "run", lambda *a, **k: _cp(1))
+
+    assert prot._trigger_kill_switch() is False, "must report the truth when the DROP failed"
+    assert prot._killswitch_tripped is False
+
+
+def test_kill_switch_not_armed_on_windows(monkeypatch):
+    prot = Protector(_KillCtrl())
+    monkeypatch.setattr(prot_mod, "_IS_WINDOWS", True)
+    calls: list = []
+    monkeypatch.setattr(prot_mod.subprocess, "run", lambda *a, **k: calls.append(a) or _cp(0))
+
+    assert prot._trigger_kill_switch() is False, "no OUTPUT DROP on Windows → not armed"
+    assert prot._killswitch_tripped is False
+    assert calls == [], "must not run iptables on Windows"

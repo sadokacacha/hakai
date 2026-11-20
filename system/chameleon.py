@@ -92,18 +92,24 @@ def _restore(iface: str) -> str:
     """
     ok = True
 
-    # Restore the original MTU (or 1500 if we never captured one).
-    mtu = _ORIG_MTU.get(iface, "1500")
-    try:
-        r = subprocess.run(
-            ["ip", "link", "set", "dev", iface, "mtu", mtu], capture_output=True, text=True
-        )
-        if r.returncode != 0:
-            _log.warning("chameleon: restore MTU %s on %s failed: %s", mtu, iface, r.stderr.strip())
+    # Restore the original MTU only if we actually captured one. If the engine
+    # never changed this iface's MTU (no capture), do NOT guess 1500 — that would
+    # clobber a jumbo/VPN/PPPoE MTU on an iface we never touched. This also makes
+    # _restore safe to call unconditionally from Controller.stop().
+    mtu = _ORIG_MTU.get(iface)
+    if mtu:
+        try:
+            r = subprocess.run(
+                ["ip", "link", "set", "dev", iface, "mtu", mtu], capture_output=True, text=True
+            )
+            if r.returncode != 0:
+                _log.warning(
+                    "chameleon: restore MTU %s on %s failed: %s", mtu, iface, r.stderr.strip()
+                )
+                ok = False
+        except (OSError, subprocess.SubprocessError) as e:
+            _log.warning("chameleon: restore MTU error on %s: %s", iface, e)
             ok = False
-    except (OSError, subprocess.SubprocessError) as e:
-        _log.warning("chameleon: restore MTU error on %s: %s", iface, e)
-        ok = False
 
     # Remove the MSS clamp, retrying to clear any duplicates.
     try:

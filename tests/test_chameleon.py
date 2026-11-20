@@ -64,3 +64,21 @@ def test_toggle_rejects_empty_iface(monkeypatch):
     status = cham_mod.toggle_chameleon("", True)
     assert "FAIL" in status.upper() or "ERROR" in status.upper()
     assert calls == [], "no command may run without an interface"
+
+
+def test_restore_does_not_touch_mtu_when_never_engaged(monkeypatch):
+    # P9: calling _restore for an iface we never engaged must NOT set an MTU
+    # (previously it guessed 1500, clobbering jumbo/VPN MTUs) — this makes it
+    # safe for Controller.stop() to call unconditionally.
+    cham_mod._ORIG_MTU.clear()
+    calls: list = []
+
+    def fake_run(cmd, *a, **k):
+        calls.append(cmd)
+        return _cp(1)  # any mangle -D "fails" (rule absent) → loop breaks
+
+    monkeypatch.setattr(cham_mod.subprocess, "run", fake_run)
+    cham_mod.toggle_chameleon("eth0", False)
+
+    mtu_sets = [c for c in calls if c[:4] == ["ip", "link", "set", "dev"]]
+    assert mtu_sets == [], "no MTU must be set for an iface that was never engaged"

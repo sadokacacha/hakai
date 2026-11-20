@@ -301,6 +301,14 @@ class Controller:
             ("ipt.cleanup", self.ipt.cleanup),
             ("ipv6.stop", self.ipv6.stop),
             ("scanner.stop_passive_discovery", self.scanner.stop_passive_discovery),
+            # Evasion subsystems are independently toggleable from the UI, so
+            # their restore must run on shutdown too — otherwise a normal window
+            # close leaks masquerade sysctls (TTL/timestamps), the chameleon MTU
+            # shift + mangle TCPMSS rule, and the ghost-firewall nft drop table.
+            # Each restore self-guards (no-op when the feature was never engaged).
+            ("masquerade.restore", lambda: apply_stack_masquerade(False)),
+            ("chameleon.restore", lambda: toggle_chameleon(self.net.iface, False)),
+            ("firewall.stealth_off", lambda: self.firewall.toggle_stealth(False)),
         ):
             try:
                 step()
@@ -438,6 +446,11 @@ class Controller:
         def _do():
             ok = self.arp.cut(ip, self.net.gateway, self.net.iface, self.net.my_ip)
             if not ok:
+                # The cut failed — revert the optimistic state so the row doesn't
+                # lie (🔒 CUT / BLOCKED) about a device that still has connectivity.
+                dev.cut = False
+                dev.status = "online"
+                self.traffic.unmark_cut(ip)
                 if log:
                     log(f"✕ {ip} — ARP resolution failed (target not reachable)", "err")
                 return
@@ -508,8 +521,11 @@ class Controller:
             return False
 
         ok = self.tc.limit(ip, kb)
-        dev.limit_kb = kb
-        dev.limited = True
+        # Only mark the device limited when tc actually applied the shaping, so
+        # the row doesn't render ⚡{kb}KB for a limit that never took effect.
+        if ok:
+            dev.limit_kb = kb
+            dev.limited = True
         if log:
             log(f"⚡ {ip} → {kb} KB/s", "warn" if ok else "err")
         return ok
@@ -626,7 +642,11 @@ class Controller:
         if state:
             # 1. Engage Mirage Cloak (Random Identity)
             msg, new_mac = engage_mirage_cloak(self.net.iface)
-            self.net.my_mac = new_mac
+            # Guard like toggle_stealth: a failed cloak returns an empty MAC;
+            # assigning it would corrupt self.net.my_mac (later .lower()'d in the
+            # traffic counter) and silently break self-traffic filtering.
+            if new_mac:
+                self.net.my_mac = new_mac
             self.stealth_active = True
 
             # 2. Stack Masquerade (Windows TTL)
