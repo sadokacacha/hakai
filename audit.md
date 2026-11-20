@@ -1180,6 +1180,36 @@ bandwidth is shaped (root + Linux + lab + manual).
 
 ---
 
+## Verification — 2026-11-20 (Phase 8, tc batch)
+
+Full gates after the `system/tc_manager.py` batch. Passed pre-commit (p2.md);
+p8 confirms, nothing new.
+
+### Quality gates (actual output)
+
+| Gate | Result | Evidence |
+|------|--------|----------|
+| `pytest -v` | **87 passed** in 0.45s (5 new tc; existing `test_tc_burst` still green) | unit + mocked (patched `_tc`) |
+| `ruff check .` | **All checks passed** | static |
+| `ruff format --check .` | 18 would reformat / 52 clean — all 18 **pre-existing WIP** (count 19→18); my 2 files → **already formatted** | static |
+| `mypy .` | **Success: no issues in 55 source files** | static |
+
+### Functional checks (actual output)
+
+| Check | Result | Evidence |
+|-------|--------|----------|
+| **Imports** | **29/29** modules import cleanly | integration (import-level), Linux, non-root |
+| **False-success / cleanup** | `tc class` fails → `limit()` False + no phantom class id; `tc filter` fails → False; all-OK → True; invalid IP → False with **0** tc calls (each logs an error) | **mocked/unit** — real HTB class/filter + actual shaping is **root-required + Linux + lab + manual** |
+| **Shutdown** | `teardown()` now resets state under the lock; called from `controller.stop()` inside its isolated try (CTL-1) | mocked/unit |
+| **Config / UI** | unchanged this batch | — |
+
+### Not verified (honest gaps)
+- No real HTB qdisc/class/filter is installed and no bandwidth is actually
+  shaped — the verified behaviour is `limit()`'s **truthful success/failure
+  signalling, validation, and state hygiene**.
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, stealth batch)
 
 Full gates after the `system/stealth.py` batch. Passed pre-commit (p2.md); p8
