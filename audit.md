@@ -1507,6 +1507,48 @@ manual).
 
 ---
 
+### `network/fingerprint.py` — RESOLVED (2 fixed) — mostly clean
+
+| ID | Sev | Location | Status |
+|----|-----|----------|--------|
+| FP-1 | Low-Med | `fingerprint_device` | **Fixed** |
+| FP-3 | Low | broad `except Exception` | **Fixed** (narrowed) |
+| FP-2 | — | cross-thread callback | **Clean** (caller marshals) |
+
+**This file is largely clean.** It correctly runs `nmap -O -sV` in a daemon
+thread and calls back; the callback contract is "runs on a worker thread", and
+the callers now marshal their UI updates (DASH-1 for the log, INFO-3 for the
+fingerprint row refresh). Windows degrades honestly (empty result when `nmap`
+is absent). The nmap-output parsing is correct.
+
+**FP-1 — No IP validation + always spawned a thread.** `ip` went to `nmap` with
+no `ipaddress` check (it is pre-validated by the scanner, but this is the one
+convention gap). *Fix:* validate **synchronously** at the top of
+`fingerprint_device`; on an invalid IP, call `callback([], "", {})` and return
+without spawning the worker thread or running nmap. *Regression:*
+`test_invalid_ip_skips_nmap_and_returns_empty`.
+
+**FP-3 — Broad swallow narrowed; parse extracted.** The nmap result parsing is
+now a pure `_parse_nmap(stdout)` helper (unit-testable without threads/nmap), and
+the worker's `except Exception: pass` is narrowed to `(OSError,
+subprocess.SubprocessError)` with a debug log (TimeoutExpired is a
+SubprocessError subclass, so it is still covered). *Regression:*
+`test_parse_nmap_extracts_ports_services_and_os`,
+`test_parse_nmap_aggressive_guess_when_no_os_details`, `test_parse_nmap_empty_output`.
+
+Verification (fingerprint batch, per updated p2.md):
+per-file `ruff`/`mypy` on **src + test** — this caught an **RUF059** (unused
+unpacked `svcs`) in the new test *before commit* (the `tests/*` ignore covers
+F841 not RUF059); fixed with `_`. Then full gates — `pytest -v` → **112 passed**
+(+4); `ruff check .` → clean; `ruff format --check` my 2 files → clean;
+`mypy .` → no issues (62 files).
+
+**Limits (fingerprint):** `_parse_nmap` is tested against captured nmap text and
+the validation path is synchronous/deterministic; no real nmap scan is run
+(nmap + root for `-O` + lab + manual).
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, firewall_apex batch)
 
 Full gates after the `system/firewall_apex.py` batch. Passed pre-commit (p2.md);
