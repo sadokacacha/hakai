@@ -1237,6 +1237,36 @@ manual).
 
 ---
 
+## Verification — 2026-11-20 (Phase 8, masquerade batch)
+
+Full gates after the `system/masquerade.py` batch. Passed pre-commit (p2.md);
+p8 confirms, nothing new.
+
+### Quality gates (actual output)
+
+| Gate | Result | Evidence |
+|------|--------|----------|
+| `pytest -v` | **91 passed** in 0.41s (4 new masquerade) | unit + mocked (patched subprocess) |
+| `ruff check .` | **All checks passed** | static |
+| `ruff format --check .` | 17 would reformat / 54 clean — all 17 **pre-existing WIP** (count 18→17); my 2 files → **already formatted** | static |
+| `mypy .` | **Success: no issues in 56 source files** | static |
+
+### Functional checks (actual output)
+
+| Check | Result | Evidence |
+|-------|--------|----------|
+| **Imports** | **29/29** modules import cleanly | integration (import-level), Linux, non-root |
+| **Restoration / cleanup** | disable with a failing TTL restore → **all 3** sysctl writes still attempted, status `[DNA: RESTORE INCOMPLETE]` + logged; all-OK → `[DNA: NATIVE]`; nothing captured → `[DNA: NATIVE]` with 0 writes | **mocked/unit** — real kernel sysctl revert is **root-required + Linux + manual** |
+| **Shutdown** | `controller.toggle_nuclear_stealth(False)` calls `apply_stack_masquerade(False)`; `controller.stop()` does not call it directly (stealth-only), noted | mocked/unit |
+| **Config / UI** | unchanged this batch | — |
+
+### Not verified (honest gaps)
+- No real sysctl (`ip_default_ttl`/`tcp_timestamps`/`tcp_window_scaling`) is read
+  or written — the verified behaviour is the restore **isolation + truthful
+  status**. The engage/mimic apply was intentionally left unchanged.
+
+---
+
 ## Verification — 2026-11-20 (Phase 8, tc batch)
 
 Full gates after the `system/tc_manager.py` batch. Passed pre-commit (p2.md);
