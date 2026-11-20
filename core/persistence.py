@@ -33,8 +33,6 @@ DEFAULT_CFG: dict = {
     "scan_timeout": 45,
     "refresh_ms": 1200,
     "default_limit_kb": 500,
-    "arp_interval": 0.3,
-    "watchdog_interval": 0.5,
 }
 
 

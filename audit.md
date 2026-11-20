@@ -2117,11 +2117,15 @@ touching the parser. *Grep proof:* after removal, no refs to `.add_drop`
 *(The full-pytest gate caught that `test_iptables_hardening.py` — a separate file
 — also tested the removed `add_drop`; fixed before commit.)*
 
-**P4-4 — Config keys defined but never consumed.** *Problem:* `DEFAULT_CFG` in
-`persistence` defines `arp_interval`/`watchdog_interval`, but `network/arp`
-hardcodes `ARP_INTERVAL`/`WATCHDOG_INTERVAL` as class constants and never reads
-the config — the knobs are dead. *Fix:* either wire `arp` to read them from `db`
-(makes the config real) or drop the keys. Low effort.
+**P4-4 — Config keys defined but never consumed. DONE.** *Problem:* `DEFAULT_CFG`
+in `persistence` defined `arp_interval`/`watchdog_interval`, but `network/arp`
+hardcodes `ARP_INTERVAL`/`WATCHDOG_INTERVAL` as class constants and nothing reads
+the config keys — so editing them in `config.json` silently did nothing
+(misleading). *Change:* **removed** the two dead keys (grep confirmed no reader,
+no test ref). Wiring them instead would be adding a feature (user-tunable
+attack-timing), which is out of the reliability scope. `DEFAULT_CFG` now holds
+only the 5 keys that are actually consumed. *Verification:* `pytest` **114
+passed**, `ruff`/`mypy` clean.
 
 **P4-5 — Platform boundary is scattered and inconsistent (the biggest latent
 issue).** *Problem:* `_IS_WINDOWS` branches are duplicated across ~10 modules
