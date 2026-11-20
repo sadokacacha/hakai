@@ -14,10 +14,10 @@ import re
 import shutil
 import socket
 import subprocess
-import sys
 from dataclasses import dataclass, field
 
-_IS_WINDOWS = sys.platform == "win32"
+from core.osutil import IS_WINDOWS as _IS_WINDOWS
+
 _log = logging.getLogger(__name__)
 
 # NIC offload features engage_mitm() disables and restore_network() puts back.

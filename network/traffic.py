@@ -24,11 +24,11 @@ except ImportError:
 import collections
 import logging
 import subprocess
-import sys
 import threading
 import time
 
-_IS_WINDOWS = sys.platform == "win32"
+from core.osutil import IS_WINDOWS as _IS_WINDOWS
+
 _log = logging.getLogger(__name__)
 
 

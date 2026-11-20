@@ -42,3 +42,9 @@ def test_valid_dns():
     assert not valid_dns("")
     assert not valid_dns(",")
     assert not valid_dns("   ")
+
+
+def test_is_windows_is_a_bool():
+    from core.osutil import IS_WINDOWS
+
+    assert isinstance(IS_WINDOWS, bool)

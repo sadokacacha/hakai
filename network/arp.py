@@ -19,13 +19,11 @@ import shutil
 import signal
 import socket
 import subprocess
-import sys
 import threading
 import time
 
 from core.netutil import valid_ip
-
-_IS_WINDOWS = sys.platform == "win32"
+from core.osutil import IS_WINDOWS as _IS_WINDOWS
 
 try:
     from scapy.all import ARP, Ether, sendp, srp

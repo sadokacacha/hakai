@@ -5,15 +5,14 @@ Protects the attacker from being spoofed or tracked.
 
 import logging
 import subprocess
-import sys
 import threading
 import time
 
 from scapy.all import ARP, sniff
 
 from core.netutil import valid_ip
+from core.osutil import IS_WINDOWS as _IS_WINDOWS
 
-_IS_WINDOWS = sys.platform == "win32"
 _log = logging.getLogger(__name__)
 
 

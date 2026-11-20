@@ -14,12 +14,11 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
-import sys
 import threading
 
 from core.netutil import valid_ip
+from core.osutil import IS_WINDOWS as _IS_WINDOWS
 
-_IS_WINDOWS = sys.platform == "win32"
 _log = logging.getLogger(__name__)
 
 

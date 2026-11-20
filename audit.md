@@ -2127,17 +2127,26 @@ attack-timing), which is out of the reliability scope. `DEFAULT_CFG` now holds
 only the 5 keys that are actually consumed. *Verification:* `pytest` **114
 passed**, `ruff`/`mypy` clean.
 
-**P4-5 — Platform boundary is scattered and inconsistent (the biggest latent
-issue).** *Problem:* `_IS_WINDOWS` branches are duplicated across ~10 modules
-with **three** different behaviours on Windows: silent fake-success
+**P4-5 — Platform boundary. PARTIALLY DONE (definition centralised; behaviour
+unification deferred by design).** *Problem (two halves):* (1) `_IS_WINDOWS =
+sys.platform == "win32"` was defined in **6** modules (`traffic`, `arp`,
+`protector`, `tc_manager`, `iptables_manager`, `netinfo`); (2) those `_IS_WINDOWS`
+branches behave **three** different ways on Windows — silent fake-success
 (`iptables_manager`, `tc_manager`), explicit error (`masquerade`, `chameleon`,
-`firewall_apex`, `network_manager`), and would-crash-but-caught-upstream
-(`arp`'s unguarded iptables). This is the IPT-win/TC-win/ARP-5/DNS-6 cluster.
-*Fix:* a small `platform`/capability shim that answers "is the Linux engine
-available?" once and makes unsupported operations **explicitly, uniformly**
-unsupported (AGENTS.md: "Windows paths must not silently no-op"). Medium effort;
-the right place to finally resolve the systemic Windows inconsistency. Recommend
-its own phase.
+`firewall_apex`, `network_manager`), and would-crash-but-caught (`arp`). *Done
+(1):* new `core/osutil.py` (`IS_WINDOWS`, a leaf importing only `sys`); the 6
+modules now `from core.osutil import IS_WINDOWS as _IS_WINDOWS` (keeping the local
+name, so every guard is unchanged) and their now-unused `import sys` is gone.
+Behaviour-preserving; `pytest` **115 passed**, `ruff`/`mypy` clean (66 files),
+31/31 imports, no cycle. *Deferred (2), with reasoning:* unifying the Windows
+behaviour (AGENTS.md: "Windows paths must not silently no-op") is a **behaviour
+change on an unsupported, untested platform** — the engine is Linux-only, so these
+branches are inactive on the target, and getting a caller contract wrong (e.g.
+`_ipt`'s Windows return type) could break the *Linux* path. It also needs a
+**product decision**: Windows = explicitly-unsupported (refuse) vs
+best-effort-degraded (current). Recommend deciding that first; the single
+`osutil.IS_WINDOWS` is now the one place to implement it. This is the one proposed
+item I judged **risk > value to force now** — documented rather than rushed.
 
 **P4-6 — UI work on the Tk thread (tracked from Phase 2).** `ui/protection_panel`
 toggles + `controller` evasion toggles run subprocesses synchronously on the Tk
