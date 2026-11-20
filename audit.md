@@ -2013,6 +2013,33 @@ ruff 0.17.0, mypy 2.4.0, Python 3.14.8, Tk 8.6.
 - **mypy config** is the one piece of tooling whose green status over-promises;
   flagged for strengthening, not removal.
 
+### Re-verification — 2026-11-20 (after the reliability bug hunt)
+
+Re-checked against the codebase after 36 reliability commits. **All verdicts
+stand unchanged** — no dependency or external tool was added, removed, or
+swapped. Measured deltas since the first tribunal:
+
+- **No new third-party dependency.** Every import added across the whole bug hunt
+  is stdlib (`ipaddress`, `logging`, `queue`, `re`, `dataclasses`, …). This
+  *reinforces* the "stdlib preferred" principle — e.g. input validation uses
+  stdlib `ipaddress` (now at ~10 sites, a Phase-4 dedupe target, not a dep).
+- **pytest** — suite grew 22 → **114** tests; still the right tool. KEEP.
+- **ruff** — config confirmed **doing real work**: it flagged real defects during
+  the hunt, including RUF059 (unused unpacked variable) in two new test files
+  that the `tests/*` F841 ignore does not cover — caught pre-commit and fixed.
+  Not decorative. KEEP.
+- **mypy** — now checks **63** source files, all green, but the
+  "under-powered on the engine" assessment **holds**: `attr-defined` is still
+  disabled for `network.*`/`controller`/`protector`/`netinfo`, and many
+  packet-layer function bodies remain unannotated (so unchecked). Green mypy
+  remains a weak signal for the scapy-facing code. KEEP, still flagged for
+  strengthening (annotate + `check_untyped_defs` on specific modules).
+- **INVESTIGATE items unchanged:** Pillow (single-use, Phase-6), XDP/`bcc`
+  (redundant drop layer, Phase-7), 4-way OUI redundancy (Phase-4 dedupe).
+
+No REPLACE/REMOVE actioned → no migration/rollback plans or removal greps needed
+this pass.
+
 ---
 
 ## 0. Re-audit — 2026-10-13
