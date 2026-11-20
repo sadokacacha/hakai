@@ -3058,3 +3058,126 @@ isolated lab network against a device you own:
    and (b) Ctrl+C the process — in both cases verify no `hakai`/REDIRECT rule
    and no stale ARP poisoning remain (`iptables -t nat -S`, `ip neigh`).
 4. **Safeguards:** confirm MONITOR and DNS refuse the gateway and self rows.
+
+---
+
+# Phase 5 — Naming (PROPOSAL ONLY — no propagation) — 2026-11-20
+
+The current name **Hakai** (破壊, Japanese "destruction") reads as malware, which
+clashes with the repositioned product: a LAN administration / diagnostics /
+traffic-management tool. This phase proposes a rename. **No code was changed** —
+this is a proposal + migration checklist for a later, explicit propagation pass.
+
+## 5.1 Candidate scoring (1–5 each; higher = better)
+
+| Candidate | Pronunciation | Memorability | Professionalism | Icon potential | Fit (LAN admin) | Total |
+|-----------|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Lanwarden** (LAN + warden) | 5 | 4 | 5 | 5 (shield/keep) | 5 (guards **and** administers) | **24** |
+| Warden | 5 | 4 | 4 | 5 | 3 (not LAN-specific) | 21 |
+| Lanseer (LAN + seer) | 4 | 4 | 4 | 4 (eye/radar) | 4 (visibility only) | 20 |
+| Lankeeper (LAN + keeper) | 5 | 3 | 4 | 3 | 4 | 19 |
+| Lanograph (LAN + -ograph) | 3 | 3 | 4 | 4 (map/graph) | 3 (recorder vibe) | 17 |
+
+## 5.2 Availability (measured, not guessed)
+
+`pip index versions <name>` and `https://api.github.com/users/<name>` (the GitHub
+check was validated: a bogus handle returns 404, a real one 200).
+
+| Candidate | PyPI | GitHub handle (user/org namespace) |
+|-----------|------|-------------------------------------|
+| **Lanwarden** | **FREE** (no distribution) | **FREE** (404) |
+| Warden | FREE | **TAKEN** (200) |
+| Lanseer | FREE | **TAKEN** (200) |
+| Lankeeper | FREE | FREE (404) |
+| Lanograph | FREE | FREE (404) |
+
+Obvious conflicts noted: `warden` and `lanseer` GitHub handles are already
+registered (would force an org suffix like `-app`/`-io`); `switchboard` (PyPI
+1.7.0) and `tollgate` (PyPI 1.4.0) were also probed and are **taken on PyPI** —
+rejected as package names. Non-software "Warden" trademarks exist broadly; the
+coined "Lanwarden" avoids that ambiguity.
+
+## 5.3 Decision: **Lanwarden** — justification
+
+- **Only top candidate clean on BOTH namespaces** (PyPI free *and* GitHub handle
+  free) — no suffix gymnastics for the package or the org.
+- **Fit is exact.** The tool both *administers* (scan, cut, limit, DNS) and
+  *guards* (ARP guard, kill-switch, ghost firewall) a LAN — "warden" captures the
+  dual control+protection role better than a pure visibility name (Lanseer) or a
+  generic one (Warden). The `lan` prefix states the domain immediately.
+- **Professional + icon-ready.** Reads as a legitimate network-admin/security
+  product; obvious icon = a shield/keep/badge. Clear pronunciation (lan-WAR-den),
+  no spelling trap.
+- Sheds the "destruction" baggage of Hakai without becoming generic.
+
+## 5.4 Migration checklist (for the later propagation pass — NOT done here)
+
+Low-churn: there is **no `hakai` import package** (roots are `core/network/
+system/ui`), so Python import paths do **not** change. The work is identifiers,
+on-disk/kernel names, branding, and a one-time data/rule migration.
+
+**A. Imports / module paths** — none. (No `import hakai`; confirm with a final
+`grep -ri "import hakai"` → expect zero.) Only the repo folder `…/tefach/hakai`
+optionally renames to `lanwarden` (cosmetic; affects no import).
+
+**B. Config / DB paths** (`core/persistence.py`)
+- `CONFIG_DIR = Path.home() / ".sadok_hakai"` → `Path.home() / ".lanwarden"`
+  (consider `~/.config/lanwarden/` XDG-style). Files unchanged: `config.json`,
+  `nicknames.json`. (`state.json` already removed in P7 — nothing to migrate.)
+- Update the module docstring "All data stored in ~/.sadok_hakai/".
+
+**C. One-time data migration** (new shim in `persistence.py`, run at import/init)
+- If the new dir is absent **and** `~/.sadok_hakai/` exists, copy
+  `config.json` + `nicknames.json` across (don't delete the old dir — leave it as
+  a rollback), log the migration once. Idempotent.
+
+**D. nftables table name** (`system/stealth.py` ×4, `system/firewall_apex.py` ×6)
+- `inet hakai_stealth` → `inet lanwarden_stealth` at every `nft add/delete/rule`.
+- **Runtime-safety:** a host that ran the old build may still hold a leftover
+  `hakai_stealth` table that the new delete (now `lanwarden_stealth`) won't clear.
+  Add a transitional cleanup that also `nft delete table inet hakai_stealth`
+  (ignore-fail) on startup and in `Controller.stop()` for one release.
+
+**E. iptables comment** (`core/protector.py` ×2 — insert + delete)
+- `--comment hakai_killswitch` → `lanwarden_killswitch`.
+- **Runtime-safety:** same transition issue — `disable_kill_switch` should also
+  `-D` any leftover `hakai_killswitch` OUTPUT rule for one release, so an old
+  armed kill-switch can still be cleared.
+
+**F. eBPF program name** (`network/xdp_engine.py` ×2) — `hakai_xdp_drop` in the C
+source and `load_func("hakai_xdp_drop", …)` → `lanwarden_xdp_drop`. Internal;
+rename both together.
+
+**G. Branding / user-facing strings**
+- `ui/dashboard.py`: window title "HAKAI v3 // SOVEREIGN APEX" and sidebar
+  "🔱 HAKAI v3" → Lanwarden branding.
+- `network/scanner.py`: UPnP User-Agent `"Hakai/3.0 UPnP/1.0"` → `"Lanwarden/1.0
+  UPnP/1.0"`.
+- `system/stealth.py`: `disengage_stealth(..., orig_hostname="Hakai")` default →
+  the new brand (it is only a fallback restore hostname; low impact).
+- `main.py`: entry docstring + the two root/admin warning prints.
+- Docstrings mentioning "Hakai" (`core/protector.py`, `core/persistence.py`
+  identity-engine banner).
+
+**H. Packaging / scripts / docs**
+- `pyproject.toml`: comment banner; if a `[project]` table is added later, set
+  `name = "lanwarden"`.
+- `run.sh`: "Hakai launcher" comment.
+- `walkthrough.md`, `CLAUDE.md`, `AGENTS.md`: update the product name going
+  forward. **Do not** rewrite `audit.md` history — note the rename at the top
+  instead.
+- **README**: none exists — create `README.md` under the new name when branding.
+
+**I. Desktop entry / launcher**
+- None exists today. If a desktop launcher is wanted, create
+  `lanwarden.desktop` (Name=Lanwarden, Exec=run.sh, Icon=lanwarden). Otherwise
+  N/A — note it so it isn't forgotten.
+
+**J. Tests to update in the same pass** (identifier strings are asserted)
+- `tests/test_protector.py` (×4 `hakai_killswitch`), `tests/test_firewall_apex.py`
+  (×1 `hakai_stealth`) — update to the new names when D/E land, or the suite
+  breaks.
+
+**Propagation order (when authorized):** B+C (paths + migration shim) → D+E
+(kernel names + transitional cleanup) → F → G/H/I (branding) → J (tests), then
+`grep -ri hakai` to confirm only `audit.md` history remains, then P8.
