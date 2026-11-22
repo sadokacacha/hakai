@@ -94,3 +94,11 @@ def test_require_ip_sets_error_when_nothing_selected(_app):
     win = _win(_app)
     assert win._require_ip() is None
     assert win._state == "error"
+
+
+def test_disconnected_state_without_gateway(_app):
+    ctrl = Controller(NetInfo(iface="", gateway=""))
+    ctrl.update_device_speeds = lambda: None
+    win = LanwardenWindow(ctrl)
+    win._timer.stop()
+    assert win._state == "disconnected", "no iface/gateway must report disconnected, not normal"

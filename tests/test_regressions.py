@@ -1,8 +1,8 @@
 """Regression tests for the 2026-10-13 re-audit fixes.
 
 These guard the specific defects fixed in that pass so they cannot silently
-come back. They are platform-safe (no root, no live networking): importing the
-UI modules only loads customtkinter, it does not create a Tk root window.
+come back. They are platform-safe (no root, no live networking) and do not touch
+the UI (which now lives behind PySide6 — see test_ui_qt.py).
 """
 
 from network.deauth import SCAPY_WIFI_OK, DeauthManager

@@ -64,6 +64,20 @@ class LanwardenWindow(QWidget):
         self._timer.timeout.connect(self._refresh)
         self._timer.start(1200)
         self._refresh()
+        self._assess_capabilities()
+
+    def _assess_capabilities(self) -> None:
+        """Reflect real state at startup instead of always claiming 'normal':
+        disconnected without an iface/gateway, degraded without nft/tc."""
+        import shutil
+
+        net = self.ctrl.net
+        if not net.iface or not net.gateway:
+            self.set_state("disconnected", "no interface / gateway")
+            return
+        missing = [b for b in ("nft", "tc") if not shutil.which(b)]
+        if missing:
+            self.set_state("degraded", "missing: " + ", ".join(missing))
 
     # ── layout ──────────────────────────────────────────────────────────────────
 

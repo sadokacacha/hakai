@@ -3,8 +3,8 @@ core/netutil.py — Shared network-address validation (pure stdlib).
 
 Centralises the IP/CIDR/DNS validation that was copy-pasted as a private
 `_valid_ip` (and `_valid_cidr`/`_valid_dns`) across network/arp,
-system/iptables_manager, core/protector, system/tc_manager, network/dns_spoof,
-network/fingerprint, and system/network_manager. One definition, one behaviour.
+core/protector, system/tc_manager, network/dns_spoof, network/fingerprint,
+and system/network_manager. One definition, one behaviour.
 
 This module imports only `ipaddress`, so it is a dependency leaf — safe to import
 from any layer (core/network/system) without creating an import cycle.

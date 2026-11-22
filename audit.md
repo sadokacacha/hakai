@@ -3326,3 +3326,62 @@ ruff clean, mypy clean (76 files), format debt 7 (pre-existing).**
   — deleting the ctk files removed pre-existing debt; no new debt added).**
 - Not verified: no live windowed session (offscreen only) — real interactive use
   is a manual check; real engine actions still need root + lab.
+
+## STEP 6 — COLD REVIEW ✅
+
+Release-engineer pass over the product-pass branch (STEPS 1–5).
+
+**Checked & clean:** no live references to any deleted module
+(iptables_manager, the ctk UI) — grep confirms; `ruff --select F` (unused/
+undefined) clean; the cut path is single (arp._apply_drop → nft.cut, no
+duplicate); FORWARD DROP precedes ACCEPT (nft insert vs append); counters read
+only from nft; rawsock closes in `finally`; nft table cleaned on stop + swept on
+start; shutdown hooks (atexit + SIGINT/SIGTERM → ctrl.stop) still wired in
+main.py; Qt workers marshal off-thread.
+
+**Found & fixed:**
+- Stale docs: `core/netutil` docstring still listed the deleted
+  `system/iptables_manager`; `test_regressions` header still said "loads
+  customtkinter". Corrected.
+- **Truthful status:** the window always settled on `normal`. Added
+  `_assess_capabilities()` at startup — reports **disconnected** without an
+  iface/gateway and **degraded** when `nft`/`tc` are missing, instead of claiming
+  ready. Test added.
+
+**Noted, not changed (low risk / out of scope):**
+- `traffic._ipt_loop` / `IPT_POLL` / `_ipt_prev` are now misnomers (nft, not
+  iptables) — cosmetic rename, deferred (behaviour correct).
+- The sqlite `db` singleton connection isn't explicitly closed (process-lifetime;
+  WAL checkpoints on exit).
+- `xdp.add_drop` remains a redundant drop layer alongside the nft cut (prior P7
+  INVESTIGATE) — still reachable, left in place.
+
+**Final p8: 156 passed, ruff clean, mypy clean (70 files), format debt 4
+(pre-existing WIP only — down from 7 at pass start).**
+
+## Product pass — lab manual-verify checklist (root + isolated lab + a test device)
+
+None of the privileged behaviour is exercised in CI. On an authorized, isolated
+lab network, against a device you own, verify:
+
+1. **Cut** a device → it loses connectivity; the nft `inet lanwarden/forward`
+   chain shows the DROP above the ACCEPT (`nft -a list chain inet lanwarden
+   forward`); `cut_records`/`operation_log` get a row.
+2. **Double cut** (cut an already-cut device) → no duplicate nft rules (handle
+   count stable); still exactly one DROP pair.
+3. **SIGINT mid-cut** (Ctrl+C while a device is cut) → process exits and the
+   network is restored (no `lanwarden` nft table, no stale ARP, `ip_forward`
+   reset) via the shutdown hook.
+4. **SIGTERM mid-cut** (`kill`) → same clean restore via the SIGTERM handler.
+5. **kill -9 mid-cut** (hard kill) → on the NEXT start, `sweep_orphans` removes
+   the orphaned `lanwarden`/`lanwarden_stealth` tables + any killswitch rule and
+   the cut ledger is reconciled (stale active_cuts cleared, logged).
+6. **Interface down mid-cut** (`ip link set <iface> down` while cutting) → no
+   crash; restore still completes; errors surfaced in the status bar.
+7. **20× cut/restore cycles** on one device → no handle/rule leak in the nft
+   chain, no fd/thread growth, device reliably reachable after each restore.
+8. **UI**: run `python main.py` as root on a lab box — the four sections drive
+   every action; privileged work doesn't freeze the window; the status bar shows
+   iface/gw/count/op/protection/last-error truthfully.
+9. **STEP 4**: `sudo python3 tools/bench_send.py <iface>` → record scapy vs raw
+   pps; if not material, `git revert` the STEP-4 commit.
