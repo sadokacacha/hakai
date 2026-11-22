@@ -1,4 +1,4 @@
-# Hakai v3 — tooling configuration.
+# Lanwarden — tooling configuration.
 #
 # Pins the lint/format/type/test rule sets so `ruff check .`, `ruff format`,
 # `mypy .` and `pytest` behave identically for everyone instead of inheriting

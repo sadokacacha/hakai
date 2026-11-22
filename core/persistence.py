@@ -1,6 +1,6 @@
 """
 core/persistence.py — Config, state, nicknames, OUI DB, format helpers.
-All data stored in ~/.sadok_hakai/
+All data stored in ~/.lanwarden/
 """
 
 from __future__ import annotations
@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import threading
 from pathlib import Path
 
@@ -16,15 +17,45 @@ from core.netutil import randomized_mac
 _log = logging.getLogger(__name__)
 
 # ── Storage paths ──────────────────────────────────────────────────────────────
-CONFIG_DIR = Path.home() / ".sadok_hakai"
+CONFIG_DIR = Path.home() / ".lanwarden"
+LEGACY_DIR = Path.home() / ".sadok_hakai"  # pre-rename location (Lanwarden migration)
 CONFIG_FILE = CONFIG_DIR / "config.json"
 NICK_FILE = CONFIG_DIR / "nicknames.json"
+
+
+def _migrate_legacy_dir() -> None:
+    """One-time copy of config/nicknames from the pre-rename ~/.sadok_hakai.
+
+    Copies (not moves) so the old dir stays as a rollback. Idempotent: only runs
+    when the new dir has no config yet, so a fresh install or an already-migrated
+    host is untouched.
+    """
+    try:
+        if CONFIG_FILE.exists() or NICK_FILE.exists():
+            return  # new config already present
+        if not LEGACY_DIR.exists():
+            return
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        copied = False
+        for name in ("config.json", "nicknames.json"):
+            src, dst = LEGACY_DIR / name, CONFIG_DIR / name
+            if src.exists() and not dst.exists():
+                shutil.copy2(src, dst)
+                copied = True
+        if copied:
+            _log.info("migrated legacy config %s -> %s", LEGACY_DIR, CONFIG_DIR)
+    except OSError as e:
+        _log.warning("legacy config migration failed: %s", e)
+
+
 try:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 except OSError as e:
     # Don't crash the whole app at import time if the home dir is read-only;
     # _save will just report failure later.
     _log.warning("could not create config dir %s: %s", CONFIG_DIR, e)
+
+_migrate_legacy_dir()
 
 DEFAULT_CFG: dict = {
     "iface": "auto",
@@ -888,7 +919,7 @@ def get_device_icon(identity: str, vendor: str, os_g: str) -> str:
 
 def classify_device(dev) -> str:
     """
-    Hakai v3 Sovereign Identity Engine — Strict Confidence Scoring.
+    Lanwarden Sovereign Identity Engine — Strict Confidence Scoring.
 
     Scoring tiers (highest wins, never overwritten by lower):
       100 — DHCP Option 12 self-reported hostname

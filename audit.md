@@ -3181,3 +3181,30 @@ rename both together.
 **Propagation order (when authorized):** B+C (paths + migration shim) → D+E
 (kernel names + transitional cleanup) → F → G/H/I (branding) → J (tests), then
 `grep -ri hakai` to confirm only `audit.md` history remains, then P8.
+
+---
+
+# Product pass (branch hakai-reliability) — 2026-11-22
+
+Full product pass per the explicit multi-step brief. No merge/push/branch switch.
+New deps limited to PySide6 + pyqtgraph (later steps). p8 run after every step.
+
+## STEP 1 — RENAME to Lanwarden ✅
+
+- **Config dir** `~/.sadok_hakai` → `~/.lanwarden` with a one-time copy shim
+  (`persistence._migrate_legacy_dir`, idempotent, keeps the old dir as rollback).
+- **Kernel object names:** nft table `hakai_stealth` → `lanwarden_stealth`
+  (stealth, firewall_apex); iptables comment `hakai_killswitch` →
+  `lanwarden_killswitch` (protector); eBPF func `hakai_xdp_drop` →
+  `lanwarden_xdp_drop` (xdp_engine).
+- **Legacy sweep:** new `system/sweep.sweep_legacy()` clears the OLD-brand nft
+  table + killswitch rule at `Controller.start()`, so a host upgraded from the
+  old build can't leak an uncleanable object. (Also the future home of the
+  operation-id orphan sweep.)
+- **Startup capability check:** `main._check_deps` now reports **nft** and **tc**
+  as REQUIRED (explicit error) and **bpftool** as optional, alongside root.
+- **Branding:** window title/sidebar, UPnP User-Agent `Lanwarden/1.0`, docstrings,
+  stealth fallback hostname, pyproject/run.sh/walkthrough.
+- Tests updated for the renamed identifiers; new `test_sweep.py`,
+  `test_persistence_migrate.py`. **p8: 150 passed, ruff clean, mypy clean (75
+  files), format debt 7 (pre-existing only).**

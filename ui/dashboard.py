@@ -43,7 +43,7 @@ class Dashboard(ctk.CTk):
         self._log_queue: queue.Queue = queue.Queue()
 
         # --- Window Config ---
-        self.title("HAKAI v3 // SOVEREIGN APEX")
+        self.title("LANWARDEN // SOVEREIGN APEX")
         self.geometry("1400x850")
         ctk.set_appearance_mode("dark")
         self.configure(fg_color=BG)
@@ -86,7 +86,7 @@ class Dashboard(ctk.CTk):
         self.sidebar.grid(row=0, column=0, sticky="nsew")
         self.sidebar.grid_rowconfigure(4, weight=1)
 
-        ctk.CTkLabel(self.sidebar, text="🔱 HAKAI v3", font=FONT_TITLE, text_color=ACCENT).pack(
+        ctk.CTkLabel(self.sidebar, text="🔱 LANWARDEN", font=FONT_TITLE, text_color=ACCENT).pack(
             pady=(40, 20)
         )
 

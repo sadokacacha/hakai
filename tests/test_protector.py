@@ -132,7 +132,7 @@ def test_kill_switch_trigger_inserts_drop_and_does_not_stop(monkeypatch):
     assert first is True
     assert prot._killswitch_tripped is True
     assert ctrl.stopped is False, "trigger must NOT call ctrl.stop() — that removed the DROP"
-    inserts = [c for c in calls if "-I" in c and "hakai_killswitch" in c]
+    inserts = [c for c in calls if "-I" in c and "lanwarden_killswitch" in c]
     assert len(inserts) == 1, "exactly one OUTPUT DROP inserted"
 
 
@@ -144,7 +144,7 @@ def test_kill_switch_trigger_is_idempotent(monkeypatch):
 
     assert prot._trigger_kill_switch() is True
     assert prot._trigger_kill_switch() is False, "second trigger must not re-insert the DROP"
-    inserts = [c for c in calls if "-I" in c and "hakai_killswitch" in c]
+    inserts = [c for c in calls if "-I" in c and "lanwarden_killswitch" in c]
     assert len(inserts) == 1, "sentry fires per-packet; the DROP must be inserted only once"
 
 
@@ -159,8 +159,8 @@ def test_disable_kill_switch_resets_trip_and_removes_rule(monkeypatch):
 
     assert prot._killswitch_tripped is False
     assert prot.kill_switch_enabled is False
-    deletes = [c for c in calls if "-D" in c and "hakai_killswitch" in c]
-    assert len(deletes) >= 1, "disable must remove the hakai_killswitch DROP"
+    deletes = [c for c in calls if "-D" in c and "lanwarden_killswitch" in c]
+    assert len(deletes) >= 1, "disable must remove the lanwarden_killswitch DROP"
     # After a disarm the switch can trip again.
     assert prot._trigger_kill_switch() is True
 

@@ -62,4 +62,4 @@ def test_disable_removes_table_and_clears_active(monkeypatch):
     status = fw.toggle_stealth(False)
     assert fw.active is False
     assert "DISENGAGED" in status.upper()
-    assert ["nft", "delete", "table", "inet", "hakai_stealth"] in calls
+    assert ["nft", "delete", "table", "inet", "lanwarden_stealth"] in calls

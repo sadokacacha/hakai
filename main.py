@@ -1,5 +1,5 @@
 """
-main.py — Hakai v3 entry point.
+main.py — Lanwarden entry point.
 
 Run with:  sudo python3 main.py
 """
@@ -35,27 +35,41 @@ def _check_root():
         except Exception:
             is_admin = False
         if not is_admin:
-            print("[!] WARNING: Hakai is not running as Administrator.")
+            print("[!] WARNING: Lanwarden is not running as Administrator.")
             print("    Network features (ARP, packet capture) require elevated privileges.")
             print("    Right-click run.bat and select 'Run as Administrator' for full functionality.")
     else:
         # Linux/macOS: check for root via euid
         if os.geteuid() != 0:
-            print("[!] Hakai must run as root.  Use: sudo python3 main.py")
+            print("[!] Lanwarden must run as root.  Use: sudo python3 main.py")
             sys.exit(1)
 
 def _check_deps():
-    deps = {
+    # Core capabilities Lanwarden relies on. nft and tc are required for the
+    # firewall/shaping engine; bpftool for the optional XDP drop; the rest are
+    # recommended. Missing ones are reported explicitly so a degraded run is
+    # never silent.
+    required = {
+        "nft": "REQUIRED: nftables — firewall / cut / stealth engine.",
+        "tc":  "REQUIRED: iproute2 tc — bandwidth limiting.",
+    }
+    recommended = {
+        "bpftool":  "Optional: XDP/eBPF drop management (also needs BCC + clang).",
         "nmap":     "For fast network scanning and fingerprinting.",
         "arpspoof": "Fallback ARP engine (apt install dsniff).",
-        "tc":       "For bandwidth limiting (iproute2).",
         "iw":       "For WiFi deauth / monitor mode management.",
     }
-    missing = [name for name in deps if not shutil.which(name)]
-    if missing:
+    missing_required = [n for n in required if not shutil.which(n)]
+    missing_recommended = [n for n in recommended if not shutil.which(n)]
+    if missing_required:
+        print("\n[!] ERROR: Missing REQUIRED capabilities — core features will fail:")
+        for m in missing_required:
+            print(f"    - {m:8} : {required[m]}")
+    if missing_recommended:
         print("\n[!] WARNING: Missing recommended dependencies:")
-        for m in missing:
-            print(f"    - {m:8} : {deps[m]}")
+        for m in missing_recommended:
+            print(f"    - {m:8} : {recommended[m]}")
+    if missing_required or missing_recommended:
         print("")
 
 _check_root()

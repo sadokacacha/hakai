@@ -21,9 +21,11 @@ class GhostFirewall:
         The host becomes a 'Black Hole' for Nmap, Ping, and unsolicited TCP.
         """
         try:
-            # 1. Clear existing Hakai tables for a clean state (scoped to our own
+            # 1. Clear our own lanwarden table for a clean state (scoped to our own
             #    table — never touches the host's other nftables rules).
-            subprocess.run(["nft", "delete", "table", "inet", "hakai_stealth"], capture_output=True)
+            subprocess.run(
+                ["nft", "delete", "table", "inet", "lanwarden_stealth"], capture_output=True
+            )
 
             if not enable:
                 self.active = False
@@ -32,7 +34,7 @@ class GhostFirewall:
             try:
                 # 2. Create table
                 subprocess.run(
-                    ["nft", "add", "table", "inet", "hakai_stealth"],
+                    ["nft", "add", "table", "inet", "lanwarden_stealth"],
                     check=True,
                     capture_output=True,
                 )
@@ -43,7 +45,7 @@ class GhostFirewall:
                         "add",
                         "chain",
                         "inet",
-                        "hakai_stealth",
+                        "lanwarden_stealth",
                         "input",
                         "{ type filter hook input priority 0; policy drop; }",
                     ],
@@ -57,7 +59,7 @@ class GhostFirewall:
                         "add",
                         "rule",
                         "inet",
-                        "hakai_stealth",
+                        "lanwarden_stealth",
                         "input",
                         "ct state established,related accept",
                     ],
@@ -66,7 +68,7 @@ class GhostFirewall:
                 )
                 # 5. Allow Loopback
                 subprocess.run(
-                    ["nft", "add", "rule", "inet", "hakai_stealth", "input", "iif lo accept"],
+                    ["nft", "add", "rule", "inet", "lanwarden_stealth", "input", "iif lo accept"],
                     check=True,
                     capture_output=True,
                 )
@@ -76,7 +78,7 @@ class GhostFirewall:
                 # half-built table down so we fail safe.
                 _log.error("GhostFirewall build failed, rolling back half-built table: %s", e)
                 subprocess.run(
-                    ["nft", "delete", "table", "inet", "hakai_stealth"], capture_output=True
+                    ["nft", "delete", "table", "inet", "lanwarden_stealth"], capture_output=True
                 )
                 self.active = False
                 return "[ERROR: FIREWALL_FAIL - build rolled back]"

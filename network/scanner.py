@@ -118,7 +118,7 @@ def _fetch_upnp_friendly(ip: str, location_url: str):
     try:
         import urllib.request
 
-        req = urllib.request.Request(location_url, headers={"User-Agent": "Hakai/3.0 UPnP/1.0"})
+        req = urllib.request.Request(location_url, headers={"User-Agent": "Lanwarden/1.0 UPnP/1.0"})
         with urllib.request.urlopen(req, timeout=3) as resp:
             data = resp.read(8192).decode(errors="ignore")
 

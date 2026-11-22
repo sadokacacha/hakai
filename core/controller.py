@@ -40,6 +40,7 @@ from system.iptables_manager import IPTManager
 from system.masquerade import apply_stack_masquerade
 from system.netinfo import NetInfo, engage_mitm
 from system.stealth import disengage_stealth, engage_mirage_cloak
+from system.sweep import sweep_legacy
 from system.tc_manager import TCManager
 
 _log = logging.getLogger(__name__)
@@ -81,6 +82,9 @@ class Controller:
     def start(self):
         """Bootstrap the engine."""
         self._running = True
+        # Clear orphaned kernel objects from a prior hard kill and legacy
+        # (pre-rename) objects, before engaging anything of our own.
+        sweep_legacy()
         # Apply MITM kernel/NIC tuning here (explicit engage), not as a side
         # effect of network detection. restore_network() reverts it on stop().
         engage_mitm(self.net)

@@ -74,15 +74,15 @@ def engage_mirage_cloak(interface: str = "wlo1", profile_name: str | None = None
         # Remove only our own table (if present); never flush the global
         # ruleset — that would destroy the host's existing firewall config
         # with no way to restore it.
-        subprocess.run(["nft", "delete", "table", "inet", "hakai_stealth"], capture_output=True)
-        subprocess.run(["nft", "add", "table", "inet", "hakai_stealth"], check=True)
+        subprocess.run(["nft", "delete", "table", "inet", "lanwarden_stealth"], capture_output=True)
+        subprocess.run(["nft", "add", "table", "inet", "lanwarden_stealth"], check=True)
         subprocess.run(
             [
                 "nft",
                 "add",
                 "chain",
                 "inet",
-                "hakai_stealth",
+                "lanwarden_stealth",
                 "input",
                 "{ type filter hook input priority 0; policy drop; }",
             ],
@@ -94,7 +94,7 @@ def engage_mirage_cloak(interface: str = "wlo1", profile_name: str | None = None
                 "add",
                 "rule",
                 "inet",
-                "hakai_stealth",
+                "lanwarden_stealth",
                 "input",
                 "ct state established,related accept",
             ],
@@ -106,7 +106,7 @@ def engage_mirage_cloak(interface: str = "wlo1", profile_name: str | None = None
     return f"[CLOAKED AS: {hostname}]", new_mac
 
 
-def disengage_stealth(interface="wlo1", orig_mac=None, orig_hostname="Hakai"):
+def disengage_stealth(interface="wlo1", orig_mac=None, orig_hostname="Lanwarden"):
     """
     Restores the machine to its original identity.
 
@@ -142,6 +142,6 @@ def disengage_stealth(interface="wlo1", orig_mac=None, orig_hostname="Hakai"):
 
     # Remove the stealth firewall table. Its absence is not a failure (the cloak
     # may not have fully engaged), so this does not affect the identity status.
-    _run(["nft", "delete", "table", "inet", "hakai_stealth"])
+    _run(["nft", "delete", "table", "inet", "lanwarden_stealth"])
 
     return "[IDENTITY RESTORED]" if ok else "[IDENTITY RESTORE INCOMPLETE]"

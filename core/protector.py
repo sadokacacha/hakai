@@ -1,5 +1,5 @@
 """
-core/protector.py — Defensive engine for Hakai.
+core/protector.py — Defensive engine for Lanwarden.
 Protects the attacker from being spoofed or tracked.
 """
 
@@ -193,7 +193,7 @@ class Protector:
                         "-m",
                         "comment",
                         "--comment",
-                        "hakai_killswitch",
+                        "lanwarden_killswitch",
                         "-j",
                         "DROP",
                     ],
@@ -233,7 +233,7 @@ class Protector:
                     "-m",
                     "comment",
                     "--comment",
-                    "hakai_killswitch",
+                    "lanwarden_killswitch",
                     "-j",
                     "DROP",
                 ],

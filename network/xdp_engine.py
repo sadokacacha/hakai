@@ -26,7 +26,7 @@ struct {
 } drop_ips SEC(".maps");
 
 SEC("xdp")
-int hakai_xdp_drop(struct xdp_md *ctx) {
+int lanwarden_xdp_drop(struct xdp_md *ctx) {
     void *data_end = (void *)(long)ctx->data_end;
     void *data = (void *)(long)ctx->data;
 
@@ -68,7 +68,7 @@ class XDPEngine:
             from bcc import BPF
 
             self._bpf = BPF(text=XDP_PROGRAM_C)
-            fn = self._bpf.load_func("hakai_xdp_drop", BPF.XDP)
+            fn = self._bpf.load_func("lanwarden_xdp_drop", BPF.XDP)
             self._bpf.attach_xdp(self.iface, fn, 0)
             self._loaded = True
             return True

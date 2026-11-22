@@ -1,6 +1,6 @@
-# Hakai v3: Sovereign Apex — Full Project Walkthrough
+# Lanwarden v3: Sovereign Apex — Full Project Walkthrough
 
-Hakai v3 is a modular, high-performance network orchestration and security suite. It is designed for transparent network monitoring, offensive traffic control, and advanced defensive posturing.
+Lanwarden v3 is a modular, high-performance network orchestration and security suite. It is designed for transparent network monitoring, offensive traffic control, and advanced defensive posturing.
 
 ---
 ## 📂 Project Structure

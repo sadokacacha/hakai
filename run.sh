@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hakai launcher — resolves the project dir, uses the venv Python, and
+# Lanwarden launcher — resolves the project dir, uses the venv Python, and
 # self-elevates to root (the engine requires it). Mirrors run.bat.
 set -euo pipefail
 
