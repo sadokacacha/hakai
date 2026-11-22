@@ -91,6 +91,14 @@ class Controller:
         sweep_orphans()
         # Create the nft FORWARD table/chain fresh (the sweep removed any orphan).
         self.nft.ensure()
+        # Reconcile the cut ledger: the sweep removed any kernel drops, so cuts
+        # still marked active in the DB are stale (a prior hard kill) — clear them.
+        stale = db.active_cuts()
+        if stale:
+            for ip in stale:
+                db.clear_cut(ip)
+            db.log_operation("reconcile", detail=f"cleared {len(stale)} stale cut(s) after restart")
+            _log.info("cut ledger: cleared %d stale cut(s) from a prior run", len(stale))
         # Apply MITM kernel/NIC tuning here (explicit engage), not as a side
         # effect of network detection. restore_network() reverts it on stop().
         engage_mitm(self.net)
@@ -399,6 +407,9 @@ class Controller:
 
             for ip in self.devices:
                 self.nft.add_accounting(ip)
+            # Persist the current device set (upsert) for cross-restart history.
+            for ip, dev in self.devices.items():
+                db.save_device(ip, dev.mac, dev.vendor, dev.hostname, dev.identity)
 
         # Pre-populate identity immediately so the column isn't blank
         with self._lock:
@@ -471,6 +482,8 @@ class Controller:
             t_mac = t_info.get("target_mac", "")
             if self.deauth and t_mac:
                 self.deauth.start_pmf_bypass(t_mac)
+            db.record_cut(ip)
+            db.log_operation("cut", ip)
             if log:
                 log(f"🔒 {ip} LOCKED — XDP + ARP flood active", "atk")
 
@@ -505,6 +518,8 @@ class Controller:
         dev.limited = False
         dev.status = "online"
         self.traffic.unmark_cut(ip)
+        db.clear_cut(ip)
+        db.log_operation("restore", ip)
         if log:
             log(f"↺ {ip} restored", "ok")
 
@@ -536,6 +551,7 @@ class Controller:
         if ok:
             dev.limit_kb = kb
             dev.limited = True
+            db.log_operation("limit", ip, f"{kb}KB")
         if log:
             log(f"⚡ {ip} → {kb} KB/s", "warn" if ok else "err")
         return ok

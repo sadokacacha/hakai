@@ -15,6 +15,8 @@ touched (subsystem methods are stubbed).
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 from core import controller as controller_mod
 from core.controller import Controller
 from core.device import Device
@@ -34,6 +36,9 @@ class _SyncThread:
 def _ctrl(monkeypatch):
     ctrl = Controller(NetInfo(iface="eth0", gateway="192.168.1.1", my_ip="192.168.1.50"))
     monkeypatch.setattr(controller_mod.threading, "Thread", _SyncThread)
+    # cut/limit now write the sqlite store; use a mock so tests don't touch the
+    # real ~/.lanwarden DB.
+    monkeypatch.setattr(controller_mod, "db", MagicMock())
     return ctrl
 
 

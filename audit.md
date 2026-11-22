@@ -3239,3 +3239,27 @@ New deps limited to PySide6 + pyqtgraph (later steps). p8 run after every step.
 - **p8: 151 passed, ruff clean, mypy clean (74 files), format debt 7
   (pre-existing).** Real-kernel nft behaviour (actual DROP/counter/handle delete)
   is a lab manual-verify item — mocked here.
+
+## STEP 3 — STORAGE (json -> sqlite WAL) ✅
+
+- `core/persistence.Persistence` is now sqlite-backed (`~/.lanwarden/lanwarden.db`,
+  `PRAGMA journal_mode=WAL`, `synchronous=NORMAL`). Every write is a committed
+  transaction — no torn files (replaces the atomic-json layer). Connection is
+  `check_same_thread=False` + a lock around every statement (shared singleton).
+- **Tables:** config, nicknames (migrated), devices, cut_records, operation_log.
+- **Public API unchanged:** `get` / `save_config` / `get_nickname` /
+  `set_nickname` (hot reads served from in-memory caches hydrated from sqlite).
+- **New API, wired so no table is write-only:**
+  - `log_operation` / `recent_operations` — controller logs cut/restore/limit;
+  - `record_cut` / `clear_cut` / `active_cuts` — controller records on cut, clears
+    on restore, and **reconciles on startup** (reads active_cuts; the orphan sweep
+    already removed the kernel drops, so stale cuts are cleared + logged);
+  - `save_device` / `load_devices` — controller upserts the device set on
+    discovery (cross-restart history; surfaced by the STEP-5 UI).
+- **Migration:** existing config.json / nicknames.json imported once on first run,
+  then renamed `.migrated` (kept as rollback). `_load` retained for this.
+- Tests: new `test_persistence_store.py` (WAL, config/nick roundtrip+persist,
+  op-log, cut lifecycle, devices upsert, json migration, _load guards); removed
+  `test_persistence_save.py` (tested the deleted `_save`); controller-action
+  tests use a mock db. **p8: 155 passed, ruff clean, mypy clean (74 files),
+  format debt 7 (pre-existing).**
