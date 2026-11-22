@@ -3263,3 +3263,33 @@ New deps limited to PySide6 + pyqtgraph (later steps). p8 run after every step.
   `test_persistence_save.py` (tested the deleted `_save`); controller-action
   tests use a mock db. **p8: 155 passed, ruff clean, mypy clean (74 files),
   format debt 7 (pre-existing).**
+
+## STEP 4 — SEND PATH (raw AF_PACKET) — PARTIAL (benchmark root-blocked) ⚠️
+
+**Blocker (one line):** AF_PACKET/`SOCK_RAW` needs root (CAP_NET_RAW); this
+sandbox is non-root (`AF_PACKET -> EPERM`), so the before/after packets-per-second
+benchmark — the step's keep/revert decision gate — cannot be run here.
+
+Implemented safely despite the blocker:
+- New `network/rawsock.RawL2Sender` — binds an AF_PACKET/SOCK_RAW socket to the
+  iface and sends pre-serialised L2 frames ("scapy builds, raw socket sends").
+  `available` is False when the socket can't open (non-root / Windows / bad iface)
+  and every error returns False instead of raising.
+- `network/arp.py` ARP-flood loop now serialises its five static L2 frames once
+  and blasts the bytes via the raw socket, **with an automatic scapy `sendp`
+  fallback** per-frame and when `available` is False. So on a root host the raw
+  path is used; everywhere else behaviour is byte-identical to before (verified
+  path unchanged). The ICMP-redirect packet is L3/routed and stays on scapy.
+- `network/scanner.py` left on scapy `srp`: its only "send" is the discovery
+  burst, which is receive-coupled (srp = send+receive+parse) — not a tight send
+  loop; converting it to raw send + manual receive/parse is high-risk, low-gain,
+  and "scapy parses" already holds. Noted, not changed.
+- `tools/bench_send.py` — a **root-only** harness that prints scapy-sendp pps vs
+  raw-AF_PACKET pps for the same frame, so the lab operator can get the real
+  numbers and decide. (`tools/` excluded from mypy — run-as-root script, not lib.)
+
+**Numbers:** scapy sendp pps = **PENDING (lab, root)**; raw AF_PACKET pps =
+**PENDING (lab, root)**. Decision: kept behind a safe scapy fallback (behaviour
+never worse); if `tools/bench_send.py` shows the gain is not material, revert this
+commit (one `git revert`). Mocked tests: `test_rawsock.py`. **p8: 160 passed,
+ruff clean, mypy clean (76 files), format debt 7 (pre-existing).**

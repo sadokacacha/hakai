@@ -46,7 +46,7 @@ python_version = "3.13"
 # non-strict mode that still catches real type errors without drowning in
 # missing-stub noise from scapy / customtkinter.
 ignore_missing_imports = true
-exclude = ["venv/", "scratch/"]
+exclude = ["venv/", "scratch/", "tools/"]
 warn_redundant_casts = true
 
 # scapy.all exposes protocol classes (IP, UDP, ARP, Dot11, BOOTP, DHCP, …)
