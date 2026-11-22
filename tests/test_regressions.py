@@ -22,26 +22,12 @@ def test_deauth_available_requires_bssid_and_iface():
     assert DeauthManager("AA:BB:CC:DD:EE:FF", "").is_available is False
 
 
-# ── N1: the Info popup and Protection panel are wired into the dashboard ────
-def test_dashboard_wires_info_and_protection_dialogs():
-    import ui.dashboard as dash
-
-    # Imported into the dashboard namespace (regression: they were never called).
-    assert hasattr(dash, "show_info_dialog")
-    assert hasattr(dash, "show_protection_panel")
-    # Handler methods that the row double-click / sidebar button invoke.
-    assert callable(dash.Dashboard._open_info)
-    assert callable(dash.Dashboard._open_protection)
+# (The former ctk Dashboard wiring regressions moved to test_ui_qt.py when the
+# UI was rebuilt in PySide6 — the feature-reachability assertions live there now.)
 
 
-# ── /wire: dormant interception features are reachable from the dashboard ────
-def test_dashboard_wires_monitor_and_dns_controls():
-    import ui.dashboard as dash
-
-    # Handlers the MONITOR / DNS action buttons invoke (were unreachable before).
-    assert callable(dash.Dashboard._cmd_monitor)
-    assert callable(dash.Dashboard._cmd_dns)
-    # They route through the controller's interception methods.
+# ── /wire: dormant interception features remain reachable on the controller ──
+def test_controller_exposes_interception_methods():
     from core.controller import Controller
 
     assert callable(Controller.monitor_device)

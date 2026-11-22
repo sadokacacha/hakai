@@ -1,10 +1,10 @@
 # scapy floor is 2.7.0: versions <2.7.0 carry an unsafe-deserialization RCE
 # (GHSA-cq46-m9x9-j8w2) triggerable via a malicious session file.
 scapy>=2.7.0
-customtkinter>=5.2.0
-# Pillow floor is 11.0.0 to stay clear of the image-parsing CVEs fixed across
-# the 10.x line (icon loading uses PIL.Image). Tested-current: 13.0.0.
-Pillow>=11.0.0
+# UI (PySide6/Qt). pyqtgraph draws the live per-device traffic plots.
+# Replaced the CustomTkinter/Tk UI + Pillow in the STEP-5 rebuild.
+PySide6>=6.6.0
+pyqtgraph>=0.13.0
 
 # ── Dev tooling (not needed to run the app; `pip install` for the gates) ──
 # Pinned to the versions the p8 gates are verified green against on Python

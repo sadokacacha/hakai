@@ -78,7 +78,7 @@ _check_deps()
 from core.controller import Controller
 from core.persistence import db, sync_vendor_db_bg
 from system.netinfo import detect_network
-from ui.dashboard import Dashboard
+from ui.main_window import LanwardenWindow
 
 
 def main():
@@ -121,11 +121,13 @@ def main():
     threading.Thread(target=sync_vendor_db_bg, daemon=True,
                      name="vendor_db_sync").start()
 
-    # ── UI ────────────────────────────────────────────────────────────────────
-    app  = Dashboard(ctrl)
+    # ── UI (PySide6) ──────────────────────────────────────────────────────────
+    from PySide6.QtWidgets import QApplication
 
-    app.protocol("WM_DELETE_WINDOW", app.on_close)
-    app.mainloop()
+    app = QApplication(sys.argv)
+    win = LanwardenWindow(ctrl)
+    win.show()
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":

@@ -3293,3 +3293,36 @@ Implemented safely despite the blocker:
 never worse); if `tools/bench_send.py` shows the gain is not material, revert this
 commit (one `git revert`). Mocked tests: `test_rawsock.py`. **p8: 160 passed,
 ruff clean, mypy clean (76 files), format debt 7 (pre-existing).**
+
+## STEP 5 — UI REBUILD in PySide6 ✅
+
+- **Deleted** the CustomTkinter UI (`ui/dashboard.py`, `info_dialog.py`,
+  `protection_panel.py`, `limit_dialog.py`, `async_util.py`, old `theme.py`) and
+  **dropped CustomTkinter + Pillow** from requirements. New deps: PySide6 6.12 +
+  pyqtgraph 0.14 (the only additions this whole pass).
+- New `ui/` : `main_window.LanwardenWindow` (QWidget), `workers.submit`
+  (QThreadPool + queued signals — all privileged work off the Qt thread,
+  marshalled back; the GUI thread never blocks), `theme.py` (flat dark QSS, no
+  gradients).
+- **Layout:** left sidebar (Watch / Warden / Keeper / Scope stacked pages) |
+  central device table | right detail pane (device info + pyqtgraph live rx/tx) |
+  bottom status bar (iface · gw · device count · active op · protection state ·
+  last error).
+- **Every prior feature preserved & reachable:** scan/flush (Watch);
+  cut/restore/limit/unlimit/rename + cut-all/restore-all (Warden); ARP guard,
+  kill switch, ghost firewall, nuclear, stealth profile, masquerade, chameleon,
+  IPv6, static-IP/DHCP (Keeper); ping/traceroute/fingerprint/deep-recon/DNS
+  redirect/monitor (Scope). DNS/monitor keep the lab-only confirmation.
+- **State machine** (`set_state`): empty, loading, normal, error, degraded,
+  disconnected, permission_denied, running, stopping, restoring, restore_failed —
+  each drives the banner + status bar.
+- **Screenshots:** all 11 states rendered offscreen to `docs/screenshots/*.png`
+  via `tools/screenshot_states.py` (no display/root needed). `normal.png` verified
+  (table, cut row red/BLOCKED, sidebar, detail graph, status bar).
+- Tests: `test_ui_qt.py` (offscreen — builds, all states render, table populates,
+  feature surface reachable, require-ip error); removed the ctk-era ui tests.
+  `ui.*` mypy override added for PySide6 stub noise (call-arg/overload/attr).
+- **p8: 155 passed, ruff clean, mypy clean (70 files), format debt 4 (down from 7
+  — deleting the ctk files removed pre-existing debt; no new debt added).**
+- Not verified: no live windowed session (offscreen only) — real interactive use
+  is a manual check; real engine actions still need root + lab.

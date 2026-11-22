@@ -63,3 +63,11 @@ module = [
     "system.netinfo",
 ]
 disable_error_code = ["attr-defined"]
+
+# PySide6 ships typed stubs that don't model the dynamic property kwargs
+# (objectName=…), the enum shorthands (Qt.Horizontal) or every QWidget overload,
+# so mypy flags idiomatic-but-runtime-valid calls. Disable those codes for the Qt
+# UI glue — the toolkit equivalent of the scapy attr-defined suppression above.
+[[tool.mypy.overrides]]
+module = ["ui.*"]
+disable_error_code = ["attr-defined", "call-arg", "call-overload"]
