@@ -36,11 +36,11 @@ from system.chameleon import toggle_chameleon
 
 # Legacy imports removed
 from system.firewall_apex import GhostFirewall
-from system.iptables_manager import IPTManager
 from system.masquerade import apply_stack_masquerade
 from system.netinfo import NetInfo, engage_mitm
+from system.nft_filter import NftFilter
 from system.stealth import disengage_stealth, engage_mirage_cloak
-from system.sweep import sweep_legacy
+from system.sweep import sweep_orphans
 from system.tc_manager import TCManager
 
 _log = logging.getLogger(__name__)
@@ -65,11 +65,15 @@ class Controller:
         self.ipv6 = IPv6Hijacker(net.iface, net.my_mac)
         self.xdp = XDPEngine(net.iface)
         self.xdp.load()
-        self.ipt = IPTManager()
+        self.nft = NftFilter()
         self.tc = TCManager()
         self.protector = Protector(self)
         self.firewall = GhostFirewall()
         self.recon = ReconEngine()
+
+        # Share one nft FORWARD filter across cut (arp) and counters (traffic).
+        self.arp.nft = self.nft
+        self.traffic.nft = self.nft
 
         # Optional deauth (wired later if WiFi)
         self.deauth = None
@@ -84,7 +88,9 @@ class Controller:
         self._running = True
         # Clear orphaned kernel objects from a prior hard kill and legacy
         # (pre-rename) objects, before engaging anything of our own.
-        sweep_legacy()
+        sweep_orphans()
+        # Create the nft FORWARD table/chain fresh (the sweep removed any orphan).
+        self.nft.ensure()
         # Apply MITM kernel/NIC tuning here (explicit engage), not as a side
         # effect of network detection. restore_network() reverts it on stop().
         engage_mitm(self.net)
@@ -302,7 +308,7 @@ class Controller:
             ("traffic.stop", self.traffic.stop),
             ("protector.stop", self.protector.stop),
             ("tc.teardown", self.tc.teardown),
-            ("ipt.cleanup", self.ipt.cleanup),
+            ("nft.cleanup", self.nft.cleanup),
             ("ipv6.stop", self.ipv6.stop),
             ("scanner.stop_passive_discovery", self.scanner.stop_passive_discovery),
             # Evasion subsystems are independently toggleable from the UI, so
@@ -392,7 +398,7 @@ class Controller:
                     new_ips.append(ip)
 
             for ip in self.devices:
-                self.ipt.add_accounting(ip)
+                self.nft.add_accounting(ip)
 
         # Pre-populate identity immediately so the column isn't blank
         with self._lock:

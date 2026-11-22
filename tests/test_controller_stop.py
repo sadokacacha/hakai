@@ -26,7 +26,7 @@ _SIDE_EFFECTS = [
     ("traffic", "stop"),
     ("protector", "stop"),
     ("tc", "teardown"),
-    ("ipt", "cleanup"),
+    ("nft", "cleanup"),
     ("ipv6", "stop"),
     ("scanner", "stop_passive_discovery"),
 ]

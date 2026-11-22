@@ -1,7 +1,7 @@
 """
 network/arp.py — 5-Layer ArpManager: the godly cut engine.
 
-Layer 1: iptables FORWARD DROP       — kernel, instant, survives everything
+Layer 1: nftables FORWARD DROP       — kernel, instant, survives everything
 Layer 2: Scapy ARP flood @ 0.3 s    — poisons both caches, both directions
 Layer 3: arpspoof binary bi-dir      — belt-and-suspenders fallback
 Layer 4: Watchdog @ 0.5 s           — re-applies 1+2+3 if anything slips
@@ -45,6 +45,10 @@ class ArpManager:
         self._watchdog_running = False
         # Optional deauth manager (injected externally if WiFi)
         self.deauth_mgr = None
+        # FORWARD-DROP backend (nftables), injected by the controller
+        # (self.arp.nft = self.nft). None when ArpManager is used standalone,
+        # in which case the L1 kernel drop is skipped (ARP poisoning still runs).
+        self.nft = None
         self._safe_mode = False
 
     def set_safe_mode(self, enabled: bool):
@@ -225,28 +229,17 @@ class ArpManager:
 
         return target_mac, gw_mac, my_mac
 
-    # ── Layer 1: iptables DROP ──────────────────────────────────────────────
+    # ── Layer 1: nftables FORWARD DROP ───────────────────────────────────────
 
     def _apply_drop(self, ip: str):
-        for flag in ("-s", "-d"):
-            chk = subprocess.run(
-                ["iptables", "-C", "FORWARD", flag, ip, "-j", "DROP"], capture_output=True
-            )
-            if chk.returncode != 0:
-                subprocess.run(
-                    ["iptables", "-I", "FORWARD", "1", flag, ip, "-j", "DROP"], capture_output=True
-                )
+        # The kernel FORWARD drop is owned by the shared NftFilter (DROP inserted
+        # above the accounting ACCEPT). Skipped if no filter was injected.
+        if self.nft is not None:
+            self.nft.cut(ip)
 
     def _remove_drop(self, ip: str):
-        for _ in range(3):
-            r1 = subprocess.run(
-                ["iptables", "-D", "FORWARD", "-s", ip, "-j", "DROP"], capture_output=True
-            )
-            r2 = subprocess.run(
-                ["iptables", "-D", "FORWARD", "-d", ip, "-j", "DROP"], capture_output=True
-            )
-            if r1.returncode != 0 and r2.returncode != 0:
-                break
+        if self.nft is not None:
+            self.nft.uncut(ip)
 
     # ── Layer 2: Scapy ARP flood ─────────────────────────────────────────────
 

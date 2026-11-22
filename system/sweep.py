@@ -24,22 +24,29 @@ from core.osutil import IS_WINDOWS as _IS_WINDOWS
 
 _log = logging.getLogger(__name__)
 
-# Objects named under the pre-rename brand that must be cleared on upgrade.
-_LEGACY_NFT_TABLES = (("inet", "hakai_stealth"),)
-_LEGACY_IPT_COMMENTS = ("hakai_killswitch",)
+# Tables to delete at startup: legacy (pre-rename) objects an upgraded host may
+# still hold, plus our own current tables — a prior hard kill can leave their cut
+# / accounting / drop-policy rules behind, so we delete and let start() recreate.
+_ORPHAN_NFT_TABLES = (
+    ("inet", "hakai_stealth"),  # legacy ghost firewall (pre-rename)
+    ("inet", "lanwarden"),  # current FORWARD cut/accounting filter
+    ("inet", "lanwarden_stealth"),  # current ghost firewall (off at startup)
+)
+# OUTPUT DROP comment tags (legacy + current) to clear a stuck kill-switch.
+_ORPHAN_IPT_COMMENTS = ("hakai_killswitch", "lanwarden_killswitch")
 
 
-def sweep_legacy(run: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> None:
-    """Remove kernel objects left under the old (Hakai) brand. Best-effort."""
+def sweep_orphans(run: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> None:
+    """Remove orphaned kernel objects at startup (legacy + hard-kill). Best-effort."""
     if _IS_WINDOWS:
         return
-    for family, table in _LEGACY_NFT_TABLES:
+    for family, table in _ORPHAN_NFT_TABLES:
         try:
             run(["nft", "delete", "table", family, table], capture_output=True)
         except (OSError, subprocess.SubprocessError) as e:
             _log.debug("sweep: nft delete %s %s failed: %s", family, table, e)
 
-    for comment in _LEGACY_IPT_COMMENTS:
+    for comment in _ORPHAN_IPT_COMMENTS:
         # Repeated kills could have stacked duplicates; delete until none remain.
         for _ in range(10):
             try:

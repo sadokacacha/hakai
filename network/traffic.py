@@ -1,7 +1,7 @@
 """
 network/traffic.py — Three-layer per-IP traffic counter.
 
-Layer 1: iptables FORWARD byte counters  (most reliable, always works as root)
+Layer 1: nftables FORWARD byte counters  (most reliable, always works as root)
 Layer 2: Scapy per-packet AsyncSniffer   (real-time speed, MITM scenarios)
 Layer 3: /proc/net/dev interface speed   (interface-level sanity check)
 
@@ -43,6 +43,9 @@ class TrafficCounter:
         self._iface = ""
         self._my_ip = ""
         self._my_mac = ""
+        # nft FORWARD counter source, injected by the controller
+        # (self.traffic.nft = self.nft). None = no Layer-1 counters (passive only).
+        self.nft = None
 
         # Per-IP sliding speed queues: deque of (timestamp, bytes)
         self._rx: dict[str, collections.deque] = collections.defaultdict(collections.deque)
@@ -134,50 +137,33 @@ class TrafficCounter:
     # ── Layer 1: iptables byte counter poll ─────────────────────────────────
 
     def _ipt_loop(self):
-        """Poll iptables byte counters (Linux only)."""
+        """Poll nftables FORWARD byte counters (Linux only)."""
         if _IS_WINDOWS:
-            return  # iptables not available on Windows
+            return  # nft not available on Windows
         while self._running:
             time.sleep(self.IPT_POLL)
             with self._lock:
                 ips = list(self._known_ips)
-            if not ips:
+            if not ips or self.nft is None:
                 continue
+
+            # {ip: (rx_bytes, tx_bytes)} from the nft accounting rules.
             try:
-                r = subprocess.run(
-                    ["iptables", "-L", "FORWARD", "-v", "-n", "-x"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                if r.returncode != 0:
-                    continue
+                counters = self.nft.read_counters()
             except Exception:
                 continue
 
             rx_now: dict[str, int] = {}
             tx_now: dict[str, int] = {}
-
-            for line in r.stdout.splitlines():
-                parts = line.split()
-                if len(parts) < 9:
+            with self._lock:
+                known = set(self._known_ips)
+            for ip, (rx_b, tx_b) in counters.items():
+                if ip == self._my_ip or ip not in known:
                     continue
-                try:
-                    bc = int(parts[1])
-                except ValueError:
-                    continue
-
-                # Strip potential /32 or other masks from iptables output
-                src = parts[7].split("/")[0]
-                dst = parts[8].split("/")[0]
-
-                with self._lock:
-                    known = self._known_ips
-
-                if src in known and src != self._my_ip:
-                    tx_now[src] = tx_now.get(src, 0) + bc
-                if dst in known and dst != self._my_ip:
-                    rx_now[dst] = rx_now.get(dst, 0) + bc
+                if rx_b:
+                    rx_now[ip] = rx_b
+                if tx_b:
+                    tx_now[ip] = tx_b
 
             now = time.time()
             with self._lock:
@@ -388,7 +374,7 @@ class TrafficCounter:
 
     def get_mode(self, ip: str) -> str:
         """
-        Returns 'MITM' if iptables FORWARD has counted bytes for this IP
+        Returns 'MITM' if nftables FORWARD has counted bytes for this IP
         (meaning traffic is actually passing through us via ARP poisoning),
         or 'PASSIVE' if we are only seeing broadcast/multicast packets.
         On a switched network, PASSIVE data is unreliable for individual devices.
@@ -400,7 +386,7 @@ class TrafficCounter:
         Returns (rx_bytes, tx_bytes) for the current session.
 
         Source priority:
-          1. iptables FORWARD counters  — accurate when we are in MITM position.
+          1. nftables FORWARD counters  — accurate when we are in MITM position.
           2. Scapy per-packet accumulator — active when NOT in MITM position.
 
         We take the MAX of both so that partial data from either source

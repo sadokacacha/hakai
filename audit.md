@@ -3208,3 +3208,34 @@ New deps limited to PySide6 + pyqtgraph (later steps). p8 run after every step.
 - Tests updated for the renamed identifiers; new `test_sweep.py`,
   `test_persistence_migrate.py`. **p8: 150 passed, ruff clean, mypy clean (75
   files), format debt 7 (pre-existing only).**
+
+## STEP 2 — KILL IPTABLES (FORWARD -> nftables) ✅
+
+- **Deleted** `system/iptables_manager.py` (IPTManager). New
+  `system/nft_filter.NftFilter` owns the whole FORWARD path in one table/chain
+  `inet lanwarden / forward` (`type filter hook forward priority filter; policy
+  accept`):
+  - **cut** = DROP rules **inserted** at the top (saddr+daddr), so DROP always
+    precedes the accounting ACCEPT.
+  - **accounting** = `counter accept` rules **appended** (saddr+daddr).
+  - Rules carry `lanwarden_cut` / `lanwarden_acct` comment tags; **removal is by
+    exact handle** (read chain JSON, delete that handle) — **never a flush**.
+  - `read_counters()` parses `nft -j list chain` → {ip: (rx, tx)} (saddr=TX,
+    daddr=RX), feeding TrafficCounter Layer 1.
+- **Rewired:** `network/arp.py` FORWARD DROP now delegates to the injected
+  `self.nft` (controller shares one instance; standalone arp skips L1, keeps ARP
+  poisoning); `network/traffic.py` Layer-1 poll reads `nft.read_counters()`
+  instead of `iptables -L FORWARD`; controller constructs `self.nft`, `ensure()`s
+  it at start, wires arp+traffic, accounts and cleans up via it.
+- **Orphan sweep broadened** (`sweep_legacy` -> `sweep_orphans`): deletes the
+  legacy `hakai_stealth` table + both killswitch comments AND our current
+  `lanwarden` / `lanwarden_stealth` tables at startup, so a hard kill can't leave
+  populated rules; `start()` re-`ensure()`s a clean chain.
+- Out of scope (left as-is, different subsystems): iptables `nat` REDIRECT
+  (dns_spoof), `mangle` TCPMSS (chameleon), `OUTPUT` killswitch (protector).
+- Tests: deleted test_iptables_manager/test_iptables_hardening; new
+  `test_nft_filter.py` (insert-vs-append ordering, handle-exact delete, counter
+  parse, Windows no-op); updated sweep + controller-stop tests.
+- **p8: 151 passed, ruff clean, mypy clean (74 files), format debt 7
+  (pre-existing).** Real-kernel nft behaviour (actual DROP/counter/handle delete)
+  is a lab manual-verify item — mocked here.
