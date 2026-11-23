@@ -8,8 +8,8 @@ Lanwarden v3 is a modular, high-performance network orchestration and security s
 ### 🚀 Root
 - **`main.py`**: The entry point.
     - Performs root privilege checks.
-    - Validates system dependencies (`nmap`, `dsniff`, `iproute2`).
-    - Initializes the `Controller` (backend) and `Dashboard` (frontend).
+    - Validates system dependencies (`nft`, `tc` required; `bpftool` optional).
+    - Initializes the `Controller` (backend) and `LanwardenWindow` (PySide6 frontend), and installs signal/atexit shutdown hooks.
     - Starts the background Vendor DB synchronization.
 
 ---
@@ -26,8 +26,11 @@ The "brain" of the application, managing state and coordination.
     - Defines the `Device` data model.
     - Stores IP, MAC, Vendor, Hostname, OS guesses, and real-time traffic stats.
 - **`persistence.py`**:
-    - Handles data storage using a combination of JSON (config) and SQLite (device history).
-    - Remembers device nicknames, custom icons, and classification (Known/Stranger).
+    - Data storage in SQLite (WAL): config, nicknames, devices, cut records, and an operation log. Legacy JSON config is imported once on first run.
+    - Remembers device nicknames across restarts (keyed by MAC).
+- **`identity.py`** / **`oui.py`**:
+    - `identity.py`: device classification + mDNS/vendor name sanitization (the confidence-scored label engine), split out of persistence.
+    - `oui.py`: MAC OUI → vendor tables and lookup.
 - **`protector.py` (Defensive Sentry)**:
     - Monitors the network for adversarial ARP spoofing attacks against the attacker.
     - **ARP Guard**: Locks the Gateway MAC in the kernel to prevent gateway hijacking.
@@ -39,8 +42,10 @@ The "brain" of the application, managing state and coordination.
 The implementation of various network protocols and attack/monitoring vectors.
 
 - **`traffic.py` (Telemetry Engine)**:
-    - 3-Layer traffic counting: `iptables` (authoritative), `Scapy` (real-time fallback), and `/proc/net/dev` (sanity check).
+    - 3-Layer traffic counting: `nft` counters (authoritative, via `NftFilter`), `Scapy` (real-time fallback), and `/proc/net/dev` (sanity check).
     - Provides smooth Mbps calculations using a sliding temporal window.
+- **`rawsock.py`**:
+    - Raw AF_PACKET L2 sender used by the ARP flood (with a Scapy fallback).
 - **`scanner.py`**:
     - Multi-stage discovery: `nmap` (Fast) → `Scapy ARP` (Reliable) → `System ARP Table` (Fallback).
     - Includes an async hostname resolver and passive mDNS/SSDP/NBNS discovery.
@@ -60,7 +65,7 @@ The implementation of various network protocols and attack/monitoring vectors.
 - **`deauth.py`**:
     - WiFi deauthentication engine for kicking devices off wireless networks (requires Monitor Mode).
 - **`oui_lookup.py`**:
-    - Fast MAC-to-Vendor lookup using an internal OUI database.
+    - MAC-to-Vendor presentation layer (privacy-bit handling) over the canonical `core.oui` lookup.
 
 ---
 
@@ -71,29 +76,27 @@ OS-level utilities and kernel-space management.
     - Auto-detects the active interface, gateway, and subnet.
     - Handles aggressive kernel tuning (Forwarding, Promiscuous mode, NIC offloading).
     - **Restoration**: Captures original system states to revert changes on exit.
-- **`iptables_manager.py`**:
-    - Programmatically manages the `FORWARD` chain for bandwidth accounting and firewall-based cutting.
+- **`nft_filter.py`** (`NftFilter`):
+    - Owns the nft `inet lanwarden` table / `forward` chain: device cuts (DROP, inserted first), byte-accounting (counter ACCEPT, appended), and counter reads. Removal is by exact handle, never a flush. (Replaced the old `iptables_manager`.)
+- **`sweep.py`**:
+    - Startup orphan sweep: clears app-owned nft tables and kill-switch comments left by a hard kill (including the legacy pre-rename names).
 - **`tc_manager.py`**:
     - Manages Linux Traffic Control (`tc`) for per-device bandwidth limiting (shaping).
-- **`stealth.py`**:
-    - Logic for "Mirage Cloak"—randomizing the attacker's MAC and Hostname to mimic consumer hardware.
-- **`masquerade.py`**:
-    - Obfuscates the attacker's TCP/IP stack (e.g., changing TTL to 128 to look like Windows).
+- **`stealth.py`** / **`masquerade.py`** / **`chameleon.py`** / **`firewall_apex.py`**:
+    - Evasion/posture: MAC+hostname "Mirage Cloak" (reusing `GhostFirewall` for a safe drop policy), TTL/stack masquerade, MTU/MSS chameleon, and the ghost firewall. All capture originals and restore on exit.
 
 ---
 
 ### 🎨 UI Module (`ui/`)
-The modern, demonic-themed frontend built with `customtkinter`.
+The frontend, built with **PySide6 (Qt)** + **pyqtgraph** (rebuilt from the former CustomTkinter UI).
 
-- **`dashboard.py`**:
-    - The main window. Features a real-time device table with live speed/usage stats.
-    - Sidebars for tactical logging and "Target Intel" display.
-- **`protection_panel.py`**:
-    - Interactive dashboard for managing the Aegis defensive suite.
-- **`limit_dialog.py`**:
-    - Custom pop-up for setting precise KB/s bandwidth limits.
+- **`main_window.py`** (`LanwardenWindow`):
+    - The main window: sidebar (Watch / Warden / Keeper / Scope), a real-time device table, a detail pane with live pyqtgraph traffic plots, and a status bar (iface/gw/op/protection/alert/error).
+    - Bandwidth limits use a Qt input dialog; protection alerts surface in the status bar.
+- **`workers.py`**:
+    - `submit()` runs privileged engine calls on a `QThreadPool` off the GUI thread, marshaling result/error/done back via queued signals.
 - **`theme.py`**:
-    - Defines the Sovereign Apex design system (Colors, Fonts, Spacing).
+    - Flat dark Qt stylesheet (QSS), palette, and the per-state banner styles.
 
 ---
 
