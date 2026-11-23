@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from scapy.all import DNS, IP
 
-from core.persistence import sanitize_mdns_name as _sanitize
+from core.identity import sanitize_mdns_name as _sanitize
 
 # Maps service-type substrings to human-readable OS/class labels
 _SERVICE_MAP = [

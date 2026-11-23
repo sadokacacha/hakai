@@ -18,7 +18,8 @@ from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 
 from core.device import Device
-from core.persistence import _is_junk_hostname, lookup_oui, sanitize_mdns_name
+from core.identity import _is_junk_hostname, sanitize_mdns_name
+from core.oui import lookup_oui
 
 # ── Hostname resolver pool ─────────────────────────────────────────────────────
 _hn_cache: dict[str, str] = {}

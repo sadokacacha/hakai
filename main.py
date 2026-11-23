@@ -76,7 +76,8 @@ _check_root()
 _check_deps()
 
 from core.controller import Controller
-from core.persistence import db, sync_vendor_db_bg
+from core.oui import sync_vendor_db_bg
+from core.persistence import db
 from system.netinfo import detect_network
 from ui.main_window import LanwardenWindow
 

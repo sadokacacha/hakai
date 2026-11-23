@@ -5,7 +5,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from core.persistence import db, lookup_oui
+from core.oui import lookup_oui
+from core.persistence import db
 
 
 class Device:

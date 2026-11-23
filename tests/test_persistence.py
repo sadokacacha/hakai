@@ -2,16 +2,14 @@
 
 from types import SimpleNamespace
 
-from core.persistence import (
+from core.identity import (
     _is_junk_hostname,
     classify_device,
-    fmt_mbps,
-    fmt_speed,
-    fmt_total,
     is_stealth_mac,
     sanitize_mdns_name,
     sanitize_vendor,
 )
+from core.persistence import fmt_mbps, fmt_speed, fmt_total
 
 
 def test_fmt_speed():

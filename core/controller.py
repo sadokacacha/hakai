@@ -14,13 +14,13 @@ from collections.abc import Callable
 from datetime import datetime
 
 from core.device import Device
-from core.persistence import (
+from core.identity import (
     _is_junk_hostname,
     classify_device,
-    db,
     sanitize_mdns_name,
     sanitize_vendor,
 )
+from core.persistence import db
 from core.protector import Protector
 from network.arp import ArpManager
 from network.dhcp_sniffer import sniff_dhcp_os

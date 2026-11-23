@@ -1,18 +1,18 @@
 """
 network/oui_lookup.py — MAC → vendor presentation layer.
 
-The actual lookup is the single canonical `core.persistence.lookup_oui` (which
-consults both static OUI tables and the optional mac-vendor-lookup library).
-This module only adds the privacy-bit presentation that the controller's intel
-callbacks expect. See P4-2 in audit.md — this used to carry a second static dict
-(FALLBACK_OUI, now moved into persistence) and a second optional library
-(ouilookup, removed as redundant).
+The actual lookup is the single canonical `core.oui.lookup_oui` (which consults
+both static OUI tables and the optional mac-vendor-lookup library). This module
+only adds the privacy-bit presentation that the controller's intel callbacks
+expect. See P4-2 in audit.md — this used to carry a second static dict
+(FALLBACK_OUI, moved into core.oui) and a second optional library (ouilookup,
+removed as redundant).
 """
 
 from __future__ import annotations
 
 from core.netutil import randomized_mac
-from core.persistence import lookup_oui
+from core.oui import lookup_oui
 
 
 def is_randomized(mac: str) -> bool:
