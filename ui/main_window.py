@@ -20,7 +20,7 @@ import collections
 import subprocess
 
 import pyqtgraph as pg
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -49,10 +49,6 @@ _COLS = ["IP", "MAC", "Name", "Vendor", "Status", "RX", "TX"]
 
 
 class LanwardenWindow(QWidget):
-    # Raised by the protector on its sniffer thread; emitting from there is
-    # marshaled to the GUI thread by Qt's queued connection.
-    alert = Signal(str)
-
     def __init__(self, ctrl):
         super().__init__()
         self.ctrl = ctrl
@@ -60,6 +56,10 @@ class LanwardenWindow(QWidget):
         self._active_op = "—"
         self._last_error = "—"
         self._last_alert = "—"
+        # Protection alerts land here from the protector's sniffer thread. A
+        # deque is the only cross-thread touch — never a Qt call off the GUI
+        # thread (that flooded Qt during an ARP storm and could crash).
+        self._alert_q: collections.deque = collections.deque(maxlen=64)
         self._hist: dict[str, collections.deque] = {}
         self.setWindowTitle("Lanwarden")
         self.resize(1180, 720)
@@ -70,10 +70,12 @@ class LanwardenWindow(QWidget):
         self._timer.start(1200)
         self._refresh()
         self._assess_capabilities()
-        # Surface defensive alerts: the protector raises them off-thread, the
-        # signal queues them to the GUI thread, and _on_alert shows them.
-        self.alert.connect(self._on_alert)
-        self.ctrl.set_alert_callback(self.alert.emit)
+        # Surface defensive alerts. The protector raises them from its scapy
+        # sniffer thread, so the sink must NOT touch Qt: it only appends to the
+        # thread-safe deque, which the GUI-thread refresh timer drains. This also
+        # coalesces an ARP-storm of alerts into one update per tick instead of
+        # flooding the Qt event loop with cross-thread signal deliveries.
+        self.ctrl.set_alert_callback(self._alert_q.append)
 
     def _assess_capabilities(self) -> None:
         """Reflect real state at startup instead of always claiming 'normal':
@@ -347,6 +349,7 @@ class LanwardenWindow(QWidget):
             self.set_state("normal" if devs else "empty")
         else:
             self._refresh_status()
+        self._drain_alerts()
 
     def _populate(self, devs) -> None:
         sel = self._selected_ip()
@@ -407,13 +410,17 @@ class LanwardenWindow(QWidget):
         self.btn_ghost.setText(f"👻 Ghost Firewall: {'ON' if self.ctrl.firewall.active else 'OFF'}")
         self.btn_nuke.setText(f"☢ Nuclear Stealth: {'ON' if self.ctrl.stealth_active else 'OFF'}")
 
-    def _on_alert(self, msg: str) -> None:
-        """Show a protection alert (runs on the GUI thread via the queued `alert`
-        signal). Repeats are de-duped so a spoof storm doesn't thrash the bar."""
-        if msg == self._last_alert:
-            return
-        self._last_alert = msg
-        self.sb_alert.setText(f"⚠ {msg}")
+    def _drain_alerts(self) -> None:
+        """Drain protection alerts queued by the (off-GUI-thread) protector and
+        show the most recent. Runs on the GUI thread from the refresh timer, so
+        no Qt call ever happens on the sniffer thread, and an ARP-storm of alerts
+        coalesces into a single status-bar update instead of flooding Qt."""
+        latest = None
+        while self._alert_q:
+            latest = self._alert_q.popleft()
+        if latest is not None and latest != self._last_alert:
+            self._last_alert = latest
+            self.sb_alert.setText(f"⚠ {latest}")
 
     def _update_detail(self) -> None:
         ip = self._selected_ip()

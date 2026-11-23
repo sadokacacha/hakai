@@ -104,14 +104,24 @@ def test_disconnected_state_without_gateway(_app):
     assert win._state == "disconnected", "no iface/gateway must report disconnected, not normal"
 
 
-def test_protection_alert_is_wired_and_displayed(_app):
+def test_protection_alert_is_wired_and_coalesced(_app):
     # The protector's alerts must reach the UI (controller.on_protection_alert
-    # was a no-op and the window never registered a sink).
+    # was a no-op and the window never registered a sink). The sink must be a
+    # thread-safe deque append — NOT a Qt call, which crashed under an ARP storm
+    # when emitted from the sniffer thread.
     win = _win(_app)
     assert win.ctrl._alert_cb is not None, "window must register an alert sink on the controller"
-    win._on_alert("⚠️ DANGER: 192.168.1.1 is spoofing (MAC changed)!")
+    assert win.ctrl._alert_cb == win._alert_q.append, (
+        "sink must be the deque append (no Qt off-thread)"
+    )
+    # An alert queued by the (off-thread) sink shows on the next GUI-thread drain.
+    win.ctrl._alert_cb("⚠️ DANGER: 192.168.1.1 is spoofing (MAC changed)!")
+    win._drain_alerts()
     assert "spoofing" in win.sb_alert.text()
-    # A repeat of the same alert is de-duped, not re-thrashed.
-    win.sb_alert.setText("")
-    win._on_alert("⚠️ DANGER: 192.168.1.1 is spoofing (MAC changed)!")
-    assert win.sb_alert.text() == "", "identical repeat alert must be ignored"
+    # A storm coalesces: many queued alerts drain to ONE update (the latest),
+    # never a flood of per-alert UI work.
+    for i in range(20):
+        win.ctrl._alert_cb(f"⚠️ alert {i}")
+    win._drain_alerts()
+    assert win.sb_alert.text().endswith("alert 19")
+    assert len(win._alert_q) == 0, "drain must empty the queue"
