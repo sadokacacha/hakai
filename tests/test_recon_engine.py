@@ -103,3 +103,53 @@ def test_run_recon_rejects_invalid_ip(monkeypatch):
     result = asyncio.run(re.run_recon("not-an-ip", "10.0.0.1"))
     assert result == _EMPTY
     assert opened == [], "no probe should connect for an invalid target ip"
+
+
+# ── RECON-5: IPv6 neighbor correlation must match the TARGET by MAC ──────────
+# The old code returned the first v6 neighbor with an lladdr — a stranger's
+# address — and stored it as this device's ipv6_ll.
+
+_V4_NEIGH = "192.168.1.9 dev eth0 lladdr aa:bb:cc:dd:ee:ff REACHABLE\n"
+_V6_NEIGH = (
+    "fe80::1 dev eth0 lladdr 11:22:33:44:55:66 REACHABLE\n"
+    "fe80::dead dev eth0 lladdr aa:bb:cc:dd:ee:ff STALE\n"
+)
+
+
+def test_ipv6_neighbor_correlates_target_by_mac(monkeypatch):
+    re = ReconEngine()
+
+    async def fake_run(*argv, timeout=2.0):
+        if argv[:3] == ("ip", "-4", "neigh"):
+            return _V4_NEIGH
+        if argv[:3] == ("ip", "-6", "neigh"):
+            return _V6_NEIGH
+        return ""
+
+    monkeypatch.setattr(re, "_run_cmd", fake_run)
+    # Must return the v6 whose lladdr matches the target's MAC, not fe80::1.
+    assert asyncio.run(re.get_ipv6_neighbor("192.168.1.9")) == "fe80::dead"
+
+
+def test_ipv6_neighbor_returns_empty_when_no_mac_match(monkeypatch):
+    re = ReconEngine()
+
+    async def fake_run(*argv, timeout=2.0):
+        if argv[:3] == ("ip", "-4", "neigh"):
+            return _V4_NEIGH  # target MAC aa:bb:...
+        if argv[:3] == ("ip", "-6", "neigh"):
+            return "fe80::1 dev eth0 lladdr 11:22:33:44:55:66 REACHABLE\n"  # different MAC
+        return ""
+
+    monkeypatch.setattr(re, "_run_cmd", fake_run)
+    assert asyncio.run(re.get_ipv6_neighbor("192.168.1.9")) == ""
+
+
+def test_ipv6_neighbor_returns_empty_when_target_mac_unknown(monkeypatch):
+    re = ReconEngine()
+
+    async def fake_run(*argv, timeout=2.0):
+        return ""  # target not in the v4 neighbor table
+
+    monkeypatch.setattr(re, "_run_cmd", fake_run)
+    assert asyncio.run(re.get_ipv6_neighbor("192.168.1.9")) == ""

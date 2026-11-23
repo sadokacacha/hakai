@@ -482,6 +482,11 @@ class Controller:
                     log(f"✕ {ip} — ARP resolution failed (target not reachable)", "err")
                 return
             self.xdp.add_drop(ip)
+            # Also drop the device's IPv6 at the NIC when recon knows it, so the
+            # cut isn't silently bypassed over IPv6 (XDP was IPv4-only).
+            v6 = dev.recon_data.get("ipv6_ll", "")
+            if v6:
+                self.xdp.add_drop6(v6)
             # WiFi deauth (if applicable)
             with self._lock:
                 t_info = self.arp._cut_ips.get(ip, {})
@@ -518,6 +523,9 @@ class Controller:
         self.arp.restore(ip)
         self.dns.stop_spoof(ip)
         self.xdp.remove_drop(ip)
+        v6 = dev.recon_data.get("ipv6_ll", "")
+        if v6:
+            self.xdp.remove_drop6(v6)
         if dev.limited:
             self.tc.unlimit(ip)
         dev.cut = False

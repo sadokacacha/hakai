@@ -3,6 +3,10 @@ network/xdp_engine.py — High-Performance Packet Nullification via eBPF XDP.
 
 Drops packets at the NIC driver level (RX path) for zero-CPU "Cuts."
 This bypasses the entire Linux networking stack (iptables/nftables).
+
+Both IPv4 (``drop_ips``) and IPv6 (``drop_ips6``) are dropped: an IPv4-only
+program let a cut device keep full IPv6 connectivity. The cut path adds the
+device's IPv4 and, when known (from recon), its IPv6 link-local.
 """
 
 import ipaddress
@@ -16,14 +20,23 @@ XDP_PROGRAM_C = r"""
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
+#include <linux/ipv6.h>
 
-/* Map to store the IPs we want to drop */
+/* IPv4 drop map (key = __be32 address) */
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 256);
     __type(key, __be32);
     __type(value, __u8);
 } drop_ips SEC(".maps");
+
+/* IPv6 drop map (key = full 16-byte address) */
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 256);
+    __type(key, struct in6_addr);
+    __type(value, __u8);
+} drop_ips6 SEC(".maps");
 
 SEC("xdp")
 int lanwarden_xdp_drop(struct xdp_md *ctx) {
@@ -34,19 +47,26 @@ int lanwarden_xdp_drop(struct xdp_md *ctx) {
     if ((void *)(eth + 1) > data_end)
         return XDP_PASS;
 
-    if (eth->h_proto != __constant_htons(ETH_P_IP))
+    if (eth->h_proto == __constant_htons(ETH_P_IP)) {
+        struct iphdr *iph = (void *)(eth + 1);
+        if ((void *)(iph + 1) > data_end)
+            return XDP_PASS;
+        /* Drop if source OR destination IPv4 is in our map */
+        if (bpf_map_lookup_elem(&drop_ips, &iph->saddr) ||
+            bpf_map_lookup_elem(&drop_ips, &iph->daddr))
+            return XDP_DROP;
         return XDP_PASS;
+    }
 
-    struct iphdr *iph = (void *)(eth + 1);
-    if ((void *)(iph + 1) > data_end)
+    if (eth->h_proto == __constant_htons(ETH_P_IPV6)) {
+        struct ipv6hdr *ip6 = (void *)(eth + 1);
+        if ((void *)(ip6 + 1) > data_end)
+            return XDP_PASS;
+        /* Drop if source OR destination IPv6 is in our map */
+        if (bpf_map_lookup_elem(&drop_ips6, &ip6->saddr) ||
+            bpf_map_lookup_elem(&drop_ips6, &ip6->daddr))
+            return XDP_DROP;
         return XDP_PASS;
-
-    /* Check if source OR destination IP is in our drop map */
-    __u8 *drop_src = bpf_map_lookup_elem(&drop_ips, &iph->saddr);
-    __u8 *drop_dst = bpf_map_lookup_elem(&drop_ips, &iph->daddr);
-    
-    if (drop_src || drop_dst) {
-        return XDP_DROP;
     }
 
     return XDP_PASS;
@@ -89,6 +109,14 @@ class XDPEngine:
         except (ipaddress.AddressValueError, ValueError):
             return None
 
+    @staticmethod
+    def _key6(ip: str) -> bytes | None:
+        """16-byte network-order key for the eBPF IPv6 map, or None if invalid."""
+        try:
+            return ipaddress.IPv6Address(ip).packed
+        except (ipaddress.AddressValueError, ValueError):
+            return None
+
     def add_drop(self, ip: str):
         if not self._loaded:
             return
@@ -111,6 +139,33 @@ class XDPEngine:
             return
         try:
             del self._bpf["drop_ips"][key]
+        except Exception:
+            pass
+
+    def add_drop6(self, ip: str):
+        """Drop an IPv6 address at the NIC too, so a cut device can't keep IPv6
+        connectivity. Called with the device's v6 link-local when recon knows it."""
+        if not self._loaded:
+            return
+        key = self._key6(ip)
+        if key is None:
+            _log.warning("xdp: refusing to drop invalid IPv6 %r", ip)
+            return
+        import struct
+
+        try:
+            self._bpf["drop_ips6"][key] = struct.pack("B", 1)
+        except Exception as e:
+            _log.warning("xdp: failed to add v6 drop for %s: %s", ip, e)
+
+    def remove_drop6(self, ip: str):
+        if not self._loaded:
+            return
+        key = self._key6(ip)
+        if key is None:
+            return
+        try:
+            del self._bpf["drop_ips6"][key]
         except Exception:
             pass
 

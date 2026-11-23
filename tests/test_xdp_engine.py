@@ -21,7 +21,7 @@ from network.xdp_engine import XDPEngine
 
 class _FakeBpf:
     def __init__(self, raise_on_remove=False):
-        self.maps = {"drop_ips": {}}
+        self.maps = {"drop_ips": {}, "drop_ips6": {}}
         self._raise = raise_on_remove
         self.removed = False
 
@@ -74,3 +74,38 @@ def test_add_drop_valid_ipv4_uses_packed_key():
 def test_add_drop_noop_when_not_loaded():
     e = XDPEngine("eth0")  # _loaded False, _bpf None
     e.add_drop("192.168.1.5")  # must not raise
+
+
+# ── IPv6 drop: the cut must not be bypassable over IPv6 ─────────────────────
+
+
+def test_add_drop6_valid_ipv6_uses_packed_key():
+    e = XDPEngine("eth0")
+    e._loaded = True
+    e._bpf = _FakeBpf()
+    e.add_drop6("fe80::dead:beef")
+    assert ipaddress.IPv6Address("fe80::dead:beef").packed in e._bpf.maps["drop_ips6"]
+
+
+def test_add_drop6_rejects_invalid():
+    e = XDPEngine("eth0")
+    e._loaded = True
+    e._bpf = _FakeBpf()
+    e.add_drop6("not-a-v6")  # an IPv4 or junk must not land in the v6 map
+    e.add_drop6("192.168.1.5")
+    assert e._bpf.maps["drop_ips6"] == {}
+
+
+def test_remove_drop6_round_trips():
+    e = XDPEngine("eth0")
+    e._loaded = True
+    e._bpf = _FakeBpf()
+    e.add_drop6("fe80::1")
+    assert e._bpf.maps["drop_ips6"] != {}
+    e.remove_drop6("fe80::1")
+    assert e._bpf.maps["drop_ips6"] == {}
+
+
+def test_add_drop6_noop_when_not_loaded():
+    e = XDPEngine("eth0")  # _loaded False, _bpf None
+    e.add_drop6("fe80::1")  # must not raise

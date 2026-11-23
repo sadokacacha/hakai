@@ -185,6 +185,25 @@ class ReconEngine:
         except Exception:
             return ""
 
+    async def _run_cmd(self, *argv: str, timeout: float = 2.0) -> str:
+        """Run argv (no shell) and return stdout, or "" on error/timeout. Always
+        times out so a wedged child can't hang the recon task forever."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+        except (OSError, ValueError):
+            return ""
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except TimeoutError:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            return ""
+        return stdout.decode(errors="ignore")
+
     # ── Stage 4: Reverse DNS (PTR) ───────────────────────────────────
     async def get_ptr_record(self, ip: str, dns_server: str) -> str:
         # Validate both values as IP addresses before they reach the command
@@ -195,40 +214,50 @@ class ReconEngine:
             ipaddress.ip_address(dns_server)
         except ValueError:
             return ""
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "dig",
-                f"@{dns_server}",
-                "-x",
-                ip,
-                "+short",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await proc.communicate()
-            name = stdout.decode().strip().rstrip(".")
-            return name if name else ""
-        except Exception:
-            return ""
+        out = await self._run_cmd("dig", f"@{dns_server}", "-x", ip, "+short", timeout=3.0)
+        first = next((ln for ln in out.splitlines() if ln.strip()), "")
+        return first.strip().rstrip(".")
+
+    async def _neighbor_mac(self, ip: str) -> str:
+        """The target's MAC from the IPv4 neighbor table (lower-case), or "".
+        Used to correlate the v4 target to its v6 link-local by hardware addr."""
+        out = await self._run_cmd("ip", "-4", "neigh", "show", ip)
+        for line in out.splitlines():
+            parts = line.split()
+            if "lladdr" in parts:
+                try:
+                    return parts[parts.index("lladdr") + 1].lower()
+                except (ValueError, IndexError):
+                    return ""
+        return ""
 
     # ── Stage 5: IPv6 Neighbor Correlation ───────────────────────────
     async def get_ipv6_neighbor(self, ip: str) -> str:
+        """Return the target's IPv6 link-local by matching its MAC — NOT the
+        first v6 neighbor on the link.
+
+        The old version ignored ``ip`` and returned ``parts[0]`` of the first
+        ``ip -6 neigh`` line with an lladdr, i.e. a random stranger's address,
+        which was then stored as this device's ipv6_ll. We now look up the
+        target's MAC in the v4 neighbor table and return only the v6 neighbor
+        that shares that MAC; no match → "".
+        """
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "ip",
-                "-6",
-                "neigh",
-                "show",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await proc.communicate()
-            for line in stdout.decode().splitlines():
-                if "lladdr" in line:
-                    parts = line.split()
-                    v6_ip = parts[0]
-                    # This logic would match MAC to correlate v4/v6
-                    return v6_ip
+            ipaddress.ip_address(ip)
+        except ValueError:
             return ""
-        except Exception:
+        mac = await self._neighbor_mac(ip)
+        if not mac:
             return ""
+        out = await self._run_cmd("ip", "-6", "neigh", "show")
+        for line in out.splitlines():
+            parts = line.split()
+            if not parts or ":" not in parts[0] or "lladdr" not in parts:
+                continue
+            try:
+                lladdr = parts[parts.index("lladdr") + 1].lower()
+            except (ValueError, IndexError):
+                continue
+            if lladdr == mac:
+                return parts[0]
+        return ""
