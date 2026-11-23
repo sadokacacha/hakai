@@ -10,6 +10,7 @@ import logging
 import socket
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime
 
 from core.device import Device
@@ -82,6 +83,11 @@ class Controller:
         self.stealth_active = False
         self._orig_mac = net.my_mac
         self._orig_hn = socket.gethostname()
+
+        # Protection-alert sink. The protector raises alerts from the sniffer
+        # thread; a UI registers a thread-safe callback (e.g. a Qt signal's
+        # emit) so the alert actually reaches the operator instead of a no-op.
+        self._alert_cb: Callable[[str], None] | None = None
 
     def start(self):
         """Bootstrap the engine."""
@@ -649,8 +655,27 @@ class Controller:
         except Exception:
             pass
 
-    def on_protection_alert(self, msg: str):
-        pass
+    def set_alert_callback(self, cb: Callable[[str], None] | None) -> None:
+        """Register a sink for protection alerts. Called from the sniffer thread,
+        so ``cb`` must be thread-safe — the Qt UI passes a signal's ``emit``,
+        which marshals to the GUI thread."""
+        self._alert_cb = cb
+
+    def on_protection_alert(self, msg: str) -> None:
+        """Surface a defensive alert (ARP storm, spoofer, kill-switch trip, …).
+
+        Was a silent no-op, so every alert the protector raised vanished. Now it
+        is logged and forwarded to the registered UI sink (if any). It does NOT
+        persist to the DB: alerts can fire per-packet during an active spoof, so
+        a write here would be unbounded — the log + live UI are the surfaces.
+        """
+        _log.warning("protection alert: %s", msg)
+        cb = self._alert_cb
+        if cb is not None:
+            try:
+                cb(msg)
+            except Exception:
+                _log.exception("protection-alert callback failed")
 
     # ── Sovereign Apex Modules ────────────────────────────────────────────────
 

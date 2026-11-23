@@ -20,7 +20,7 @@ import collections
 import subprocess
 
 import pyqtgraph as pg
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -42,19 +42,24 @@ from PySide6.QtWidgets import (
 
 from core.persistence import fmt_speed
 from system.network_manager import apply_static_config, get_connections, set_dhcp
-from ui.theme import ACCENT, GREEN, MUTED, PANEL, QSS, STATE_STYLES, TEXT
+from ui.theme import ACCENT, GREEN, MUTED, PANEL, QSS, RED, STATE_STYLES, TEXT
 from ui.workers import submit
 
 _COLS = ["IP", "MAC", "Name", "Vendor", "Status", "RX", "TX"]
 
 
 class LanwardenWindow(QWidget):
+    # Raised by the protector on its sniffer thread; emitting from there is
+    # marshaled to the GUI thread by Qt's queued connection.
+    alert = Signal(str)
+
     def __init__(self, ctrl):
         super().__init__()
         self.ctrl = ctrl
         self._state = "empty"
         self._active_op = "—"
         self._last_error = "—"
+        self._last_alert = "—"
         self._hist: dict[str, collections.deque] = {}
         self.setWindowTitle("Lanwarden")
         self.resize(1180, 720)
@@ -65,6 +70,10 @@ class LanwardenWindow(QWidget):
         self._timer.start(1200)
         self._refresh()
         self._assess_capabilities()
+        # Surface defensive alerts: the protector raises them off-thread, the
+        # signal queues them to the GUI thread, and _on_alert shows them.
+        self.alert.connect(self._on_alert)
+        self.ctrl.set_alert_callback(self.alert.emit)
 
     def _assess_capabilities(self) -> None:
         """Reflect real state at startup instead of always claiming 'normal':
@@ -300,10 +309,13 @@ class LanwardenWindow(QWidget):
         self.sb_count = QLabel()
         self.sb_op = QLabel()
         self.sb_prot = QLabel()
+        self.sb_alert = QLabel()
         self.sb_err = QLabel()
         for lbl in (self.sb_iface, self.sb_gw, self.sb_count, self.sb_op, self.sb_prot):
             lbl.setStyleSheet(f"color:{MUTED};border-right:1px solid #2a313c;padding:0 8px;")
             lay.addWidget(lbl)
+        self.sb_alert.setStyleSheet(f"color:{RED};border-right:1px solid #2a313c;padding:0 8px;")
+        lay.addWidget(self.sb_alert)
         self.sb_err.setStyleSheet(f"color:{MUTED};padding:0 8px;")
         lay.addWidget(self.sb_err, 1)
         return bar
@@ -384,6 +396,7 @@ class LanwardenWindow(QWidget):
         if getattr(self.ctrl, "stealth_active", False):
             prot.append("stealth")
         self.sb_prot.setText("protection: " + (", ".join(prot) if prot else "none"))
+        self.sb_alert.setText("" if self._last_alert == "—" else f"⚠ {self._last_alert}")
         self.sb_err.setText(f"last error: {self._last_error}")
         self.btn_arp.setText(
             f"🛡 ARP Guard: {'ON' if self.ctrl.protector.arp_guard_enabled else 'OFF'}"
@@ -393,6 +406,14 @@ class LanwardenWindow(QWidget):
         )
         self.btn_ghost.setText(f"👻 Ghost Firewall: {'ON' if self.ctrl.firewall.active else 'OFF'}")
         self.btn_nuke.setText(f"☢ Nuclear Stealth: {'ON' if self.ctrl.stealth_active else 'OFF'}")
+
+    def _on_alert(self, msg: str) -> None:
+        """Show a protection alert (runs on the GUI thread via the queued `alert`
+        signal). Repeats are de-duped so a spoof storm doesn't thrash the bar."""
+        if msg == self._last_alert:
+            return
+        self._last_alert = msg
+        self.sb_alert.setText(f"⚠ {msg}")
 
     def _update_detail(self) -> None:
         ip = self._selected_ip()

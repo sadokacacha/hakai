@@ -102,3 +102,16 @@ def test_disconnected_state_without_gateway(_app):
     win = LanwardenWindow(ctrl)
     win._timer.stop()
     assert win._state == "disconnected", "no iface/gateway must report disconnected, not normal"
+
+
+def test_protection_alert_is_wired_and_displayed(_app):
+    # The protector's alerts must reach the UI (controller.on_protection_alert
+    # was a no-op and the window never registered a sink).
+    win = _win(_app)
+    assert win.ctrl._alert_cb is not None, "window must register an alert sink on the controller"
+    win._on_alert("⚠️ DANGER: 192.168.1.1 is spoofing (MAC changed)!")
+    assert "spoofing" in win.sb_alert.text()
+    # A repeat of the same alert is de-duped, not re-thrashed.
+    win.sb_alert.setText("")
+    win._on_alert("⚠️ DANGER: 192.168.1.1 is spoofing (MAC changed)!")
+    assert win.sb_alert.text() == "", "identical repeat alert must be ignored"
