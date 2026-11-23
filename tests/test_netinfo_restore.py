@@ -134,3 +134,37 @@ def test_restore_reports_success(monkeypatch):
     info = _mk_info()
     monkeypatch.setattr(netinfo.subprocess, "run", _Recorder())
     assert restore_network(info) is True
+
+
+# ── NET-4 (C3): engage/restore offload symmetry ─────────────────────────────
+
+
+def test_engage_disables_only_captured_offloads(monkeypatch):
+    """engage must disable exactly the offloads whose originals were captured —
+    so every offload it turns off has a record restore can turn back on."""
+    info = _mk_info()  # captured {"gro": "off", "tso": "on"}
+
+    rec = _Recorder()
+    monkeypatch.setattr(netinfo.subprocess, "run", rec)
+    engage_mitm(info)
+
+    assert len(rec.ethtool_sets) == 1, "exactly one ethtool -K disable call"
+    call = rec.ethtool_sets[0]
+    params = call[call.index("-K") + 2 :]  # skip "-K <iface>"
+    flags = params[0::2]
+    states = params[1::2]
+    assert set(flags) == {"gro", "tso"}, "only the captured offloads are touched"
+    assert set(states) == {"off"}, "engage turns the captured offloads off"
+
+
+def test_engage_skips_offloads_when_none_captured(monkeypatch):
+    """If `ethtool -k` yielded nothing at detect time (empty capture), engage
+    must NOT force offloads off — there'd be no record to restore them."""
+    info = _mk_info()
+    info._orig_offloads = {}  # capture returned nothing
+
+    rec = _Recorder()
+    monkeypatch.setattr(netinfo.subprocess, "run", rec)
+    engage_mitm(info)
+
+    assert rec.ethtool_sets == [], "must not disable offloads we can't restore"

@@ -260,21 +260,25 @@ def engage_mitm(info: NetInfo) -> bool:
 
     ok &= _set_promisc(info.iface, True)
 
+    # Disable ONLY the offloads whose original state we captured, so engage and
+    # restore stay symmetric. An offload we couldn't read (empty capture, e.g.
+    # `ethtool -k` failed at detect time) is left untouched rather than forced
+    # off with no record to turn it back on — capture-or-None.
     ethtool = shutil.which("ethtool")
-    if ethtool:
+    if ethtool and info._orig_offloads:
+        args: list[str] = [ethtool, "-K", info.iface]
+        for flag in info._orig_offloads:
+            args += [flag, "off"]
         try:
-            r = subprocess.run(
-                [ethtool, "-K", info.iface, "gro", "off", "lro", "off", "tso", "off", "gso", "off"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
+            r = subprocess.run(args, capture_output=True, text=True, timeout=5)
             if r.returncode != 0:
                 _log.warning("ethtool -K (disable offloads) failed: %s", r.stderr.strip())
                 ok = False
         except (OSError, subprocess.SubprocessError) as e:
             _log.warning("ethtool -K error: %s", e)
             ok = False
+    elif ethtool:
+        _log.warning("skipping offload disable: no original offload state captured")
     return ok
 
 

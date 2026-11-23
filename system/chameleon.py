@@ -41,6 +41,8 @@ def _read_mtu(iface: str) -> str:
         )
     except (OSError, subprocess.SubprocessError):
         return ""
+    if r.returncode != 0:
+        return ""  # a failed read must not masquerade as a captured original
     m = re.search(r"\bmtu (\d+)", r.stdout)
     return m.group(1) if m else ""
 
@@ -56,18 +58,31 @@ def toggle_chameleon(iface: str, enable: bool) -> str:
 
 
 def _engage(iface: str) -> str:
-    """Apply the MTU shift + MSS clamp (evasion — values unchanged)."""
+    """Apply the MTU shift + MSS clamp.
+
+    Capture-or-None: the MTU is shifted only if the original was captured — we
+    never change an MTU we can't put back (clobbering a jumbo/VPN/PPPoE value).
+    On an MSS-clamp failure the MTU we just shifted is reverted, so engage never
+    leaves the iface in a half-changed state.
+    """
+    mtu_changed = False
     try:
-        # Capture the original MTU before changing it so _restore can put it back.
+        # 1. Capture the original MTU, then shift only if we actually captured it.
         if iface not in _ORIG_MTU:
             cur = _read_mtu(iface)
             if cur:
                 _ORIG_MTU[iface] = cur
-
-        # 1. MTU shifting (mimics common VPN/PPPoE overhead)
-        subprocess.run(
-            ["ip", "link", "set", "dev", iface, "mtu", "1492"], check=True, capture_output=True
-        )
+        if iface in _ORIG_MTU:
+            r = subprocess.run(
+                ["ip", "link", "set", "dev", iface, "mtu", "1492"], capture_output=True, text=True
+            )
+            if r.returncode != 0:
+                _log.error("chameleon: MTU shift failed on %s: %s", iface, r.stderr.strip())
+                _ORIG_MTU.pop(iface, None)  # we didn't change it → drop the record
+            else:
+                mtu_changed = True
+        else:
+            _log.warning("chameleon: could not capture MTU on %s; skipping MTU shift", iface)
 
         # 2. MSS clamping — idempotent: -C before -A so a repeated engage doesn't
         #    stack duplicate mangle rules that the single -D on restore would miss.
@@ -75,12 +90,23 @@ def _engage(iface: str) -> str:
             ["iptables", *_MANGLE, "-C", *_mss_rule(iface)], capture_output=True, text=True
         )
         if chk.returncode != 0:
-            subprocess.run(
-                ["iptables", *_MANGLE, "-A", *_mss_rule(iface)], check=True, capture_output=True
+            add = subprocess.run(
+                ["iptables", *_MANGLE, "-A", *_mss_rule(iface)], capture_output=True, text=True
             )
+            if add.returncode != 0:
+                _log.error(
+                    "chameleon: MSS clamp failed on %s: %s — rolling back",
+                    iface,
+                    add.stderr.strip(),
+                )
+                if mtu_changed:
+                    _restore(iface)  # revert the MTU we just shifted
+                return "[ERROR: CHAMELEON_FAIL - MSS clamp]"
         return "[EVASION: ACTIVE]"
-    except (subprocess.CalledProcessError, OSError) as e:
-        _log.warning("chameleon engage failed on %s: %s", iface, e)
+    except (subprocess.CalledProcessError, OSError, subprocess.SubprocessError) as e:
+        _log.warning("chameleon engage failed on %s: %s — rolling back", iface, e)
+        if mtu_changed:
+            _restore(iface)
         return f"[ERROR: CHAMELEON_FAIL - {e!s}]"
 
 

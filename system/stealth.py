@@ -8,6 +8,8 @@ import random
 import subprocess
 import time
 
+from system.firewall_apex import GhostFirewall
+
 _log = logging.getLogger(__name__)
 
 PROFILES = [
@@ -23,10 +25,67 @@ PROFILES = [
 ]
 
 
-def engage_mirage_cloak(interface: str = "wlo1", profile_name: str | None = None):
+def _run(args: list[str]) -> bool:
+    """Run a command, capturing output; log and return False on any failure
+    instead of leaking stderr to the console or swallowing it silently."""
+    try:
+        r = subprocess.run(args, capture_output=True, text=True)
+    except (OSError, subprocess.SubprocessError) as e:
+        _log.warning("stealth: %s error: %s", " ".join(args), e)
+        return False
+    if r.returncode != 0:
+        _log.warning("stealth: %s failed: %s", " ".join(args), r.stderr.strip())
+        return False
+    return True
+
+
+def _current_ssid() -> str | None:
+    """Read the currently-connected Wi-Fi SSID for an instant re-bind after a MAC
+    change. Returns None (logged) on any read failure — never raises."""
+    try:
+        r = subprocess.run(
+            ["nmcli", "-t", "-f", "active,ssid", "dev", "wifi"], capture_output=True, text=True
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        _log.debug("stealth: could not read current SSID: %s", e)
+        return None
+    for line in r.stdout.splitlines():
+        if line.startswith("yes") and ":" in line:
+            return line.split(":", 1)[1]
+    return None
+
+
+def _change_mac(interface: str, new_mac: str, ssid: str | None) -> bool:
+    """Bring the link down, set the new MAC, bring it back up — rolling the link
+    back UP on any partial failure so the interface is never left stranded down.
+    Returns True only when the MAC actually changed and the link is up."""
+    if not _run(["ip", "link", "set", interface, "down"]):
+        return False
+    if not _run(["ip", "link", "set", interface, "address", new_mac]):
+        # The address set failed; the link is still down → bring it back up so
+        # the host isn't stranded off the network, and report the failure.
+        _log.error("stealth: MAC change failed on %s; restoring link up", interface)
+        _run(["ip", "link", "set", interface, "up"])
+        return False
+    if not _run(["ip", "link", "set", interface, "up"]):
+        _log.error("stealth: %s left down after MAC change; retrying up", interface)
+        _run(["ip", "link", "set", interface, "up"])
+        return False
+    if ssid:
+        # Best-effort re-bind; failure here doesn't strand the link.
+        subprocess.run(["nmcli", "dev", "wifi", "connect", ssid], capture_output=True)
+    return True
+
+
+def engage_mirage_cloak(
+    interface: str = "wlo1", profile_name: str | None = None
+) -> tuple[str, str]:
     """
     Tactical Cloak: apply the named Mirage profile, or a random one when
     profile_name is empty/"RANDOM"/unknown.
+
+    Returns ``(status, new_mac)``. ``new_mac`` is empty when the MAC did not
+    actually change, so the caller never adopts a MAC it doesn't really have.
     """
     if profile_name and profile_name != "RANDOM":
         profile = next((p for p in PROFILES if p["name"] == profile_name), None) or random.choice(
@@ -37,76 +96,39 @@ def engage_mirage_cloak(interface: str = "wlo1", profile_name: str | None = None
     hostname = f"{profile['name']}-{random.randint(10, 99)}"
     mac_prefix = profile["oui"]
 
-    # 1. Change Hostname
-    try:
-        subprocess.run(["hostnamectl", "set-hostname", hostname], check=True)
-    except Exception:
-        pass
+    # 1. Change hostname (non-fatal; logged on failure).
+    if not _run(["hostnamectl", "set-hostname", hostname]):
+        _log.warning("stealth: hostname change to %s did not apply", hostname)
 
-    # 2. Extract current SSID for instant re-bind
-    try:
-        ssid_res = subprocess.run(
-            ["nmcli", "-t", "-f", "active,ssid", "dev", "wifi"], capture_output=True, text=True
-        )
-        current_ssid = next(
-            (line.split(":")[1] for line in ssid_res.stdout.splitlines() if line.startswith("yes")),
-            None,
-        )
-    except Exception:
-        current_ssid = None
+    # 2. Extract current SSID for instant re-bind.
+    current_ssid = _current_ssid()
 
-    # 3. Change MAC Address
-    new_mac = f"{mac_prefix}:{random.randint(10, 99):02x}:{random.randint(10, 99):02x}:{random.randint(10, 99):02x}"
-    try:
-        subprocess.run(["ip", "link", "set", interface, "down"], check=True)
-        subprocess.run(["ip", "link", "set", interface, "address", new_mac], check=True)
-        subprocess.run(["ip", "link", "set", interface, "up"], check=True)
+    # 3. Change MAC — with link recovery on partial failure.
+    new_mac = (
+        f"{mac_prefix}:{random.randint(10, 99):02x}:"
+        f"{random.randint(10, 99):02x}:{random.randint(10, 99):02x}"
+    )
+    mac_ok = _change_mac(interface, new_mac, current_ssid)
+    if not mac_ok:
+        new_mac = ""  # don't claim a MAC we didn't actually set
 
-        # Instant Re-bind
-        if current_ssid:
-            subprocess.run(["nmcli", "dev", "wifi", "connect", current_ssid], capture_output=True)
-    except Exception:
-        pass
-
-    # 4. Engage Ghost Firewall (Silent-Drop) after 1s grace period
+    # 4. Engage the Ghost Firewall (silent-drop) after a short grace period.
+    #    Reuse GhostFirewall, which builds the established/related AND loopback
+    #    accept rules and rolls a half-built table back on failure instead of
+    #    locking the host out of its own network (the inline copy did neither).
     time.sleep(1)
-    try:
-        # Remove only our own table (if present); never flush the global
-        # ruleset — that would destroy the host's existing firewall config
-        # with no way to restore it.
-        subprocess.run(["nft", "delete", "table", "inet", "lanwarden_stealth"], capture_output=True)
-        subprocess.run(["nft", "add", "table", "inet", "lanwarden_stealth"], check=True)
-        subprocess.run(
-            [
-                "nft",
-                "add",
-                "chain",
-                "inet",
-                "lanwarden_stealth",
-                "input",
-                "{ type filter hook input priority 0; policy drop; }",
-            ],
-            check=True,
-        )
-        subprocess.run(
-            [
-                "nft",
-                "add",
-                "rule",
-                "inet",
-                "lanwarden_stealth",
-                "input",
-                "ct state established,related accept",
-            ],
-            check=True,
-        )
-    except Exception:
-        pass
+    fw_status = GhostFirewall().toggle_stealth(True)
+    if "LOCKED" not in fw_status:
+        _log.warning("stealth: ghost firewall did not engage: %s", fw_status)
 
-    return f"[CLOAKED AS: {hostname}]", new_mac
+    if new_mac:
+        return f"[CLOAKED AS: {hostname}]", new_mac
+    return f"[CLOAK PARTIAL: {hostname} — MAC unchanged]", ""
 
 
-def disengage_stealth(interface="wlo1", orig_mac=None, orig_hostname="Lanwarden"):
+def disengage_stealth(
+    interface: str = "wlo1", orig_mac: str | None = None, orig_hostname: str = "Lanwarden"
+) -> str:
     """
     Restores the machine to its original identity.
 
@@ -116,18 +138,6 @@ def disengage_stealth(interface="wlo1", orig_mac=None, orig_hostname="Lanwarden"
     returned status reflects whether the identity-critical restores (hostname,
     MAC) actually succeeded, instead of always claiming success.
     """
-
-    def _run(args: list[str]) -> bool:
-        try:
-            r = subprocess.run(args, capture_output=True, text=True)
-        except (OSError, subprocess.SubprocessError) as e:
-            _log.warning("stealth: %s error: %s", " ".join(args), e)
-            return False
-        if r.returncode != 0:
-            _log.warning("stealth: %s failed: %s", " ".join(args), r.stderr.strip())
-            return False
-        return True
-
     ok = True
 
     # Restore hostname

@@ -54,3 +54,65 @@ def test_disengage_reports_success_when_all_ok(monkeypatch):
         "wlan0", orig_mac="aa:bb:cc:dd:ee:ff", orig_hostname="real-host"
     )
     assert "RESTORED" in status.upper() and "INCOMPLETE" not in status.upper()
+
+
+# ── engage_mirage_cloak: link recovery + GhostFirewall reuse ────────────────
+# C1/C2 (inline stealth firewall could lock the host out, lacked `iif lo accept`)
+# and C7 (a failed MAC change left the interface stranded down, silently).
+
+
+class _FakeGhostFirewall:
+    """Stand-in so engage never shells out to real nft; records engagement."""
+
+    engaged: bool = False
+
+    def toggle_stealth(self, enable: bool) -> str:
+        type(self).engaged = enable
+        return "[SHIELDS: LOCKED]"
+
+
+def test_engage_recovers_link_up_when_mac_change_fails(monkeypatch):
+    """C7: a FAILED MAC capture/apply must bring the interface back UP (never
+    leave it stranded down) and report an empty MAC so the caller doesn't adopt
+    a MAC it never actually set."""
+    _FakeGhostFirewall.engaged = False
+    calls: list = []
+
+    def fake_run(cmd, *a, **k):
+        calls.append(cmd)
+        # The MAC *address* set fails; everything else (down/up) succeeds.
+        rc = 1 if cmd[:5] == ["ip", "link", "set", "wlan0", "address"] else 0
+        return subprocess.CompletedProcess(cmd, rc, "", "cannot assign")
+
+    monkeypatch.setattr(stealth_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(stealth_mod, "GhostFirewall", _FakeGhostFirewall)
+    monkeypatch.setattr(stealth_mod.time, "sleep", lambda *_a: None)
+
+    msg, new_mac = stealth_mod.engage_mirage_cloak("wlan0", "iPhone-15-Pro")
+
+    # The link must be brought back up after the failed address set.
+    assert ["ip", "link", "set", "wlan0", "up"] in calls, "stranded-down link must be recovered"
+    # The caller must not be handed a MAC that was never applied.
+    assert new_mac == ""
+    assert "PARTIAL" in msg.upper()
+
+
+def test_engage_cloaks_and_reuses_ghost_firewall_when_all_ok(monkeypatch):
+    """C1/C2: the firewall is built via GhostFirewall (established + loopback
+    accepts, rollback-on-failure) rather than the old inline drop-only copy."""
+    _FakeGhostFirewall.engaged = False
+    monkeypatch.setattr(
+        stealth_mod.subprocess,
+        "run",
+        lambda cmd, *a, **k: subprocess.CompletedProcess(cmd, 0, "", ""),
+    )
+    monkeypatch.setattr(stealth_mod, "GhostFirewall", _FakeGhostFirewall)
+    monkeypatch.setattr(stealth_mod.time, "sleep", lambda *_a: None)
+
+    msg, new_mac = stealth_mod.engage_mirage_cloak("wlan0", "iPhone-15-Pro")
+
+    assert new_mac, "a successful cloak must report the new MAC"
+    assert "CLOAKED" in msg.upper()
+    assert _FakeGhostFirewall.engaged is True, (
+        "must engage the shared GhostFirewall, not inline nft"
+    )

@@ -66,6 +66,57 @@ def test_toggle_rejects_empty_iface(monkeypatch):
     assert calls == [], "no command may run without an interface"
 
 
+# ── CHAM-5 (C5): capture-or-None + rollback on partial engage failure ───────
+
+
+def test_engage_skips_mtu_shift_when_capture_fails(monkeypatch):
+    """If the original MTU can't be read, the engine must NOT shift the MTU to
+    1492 (it could never be restored) and must record no original."""
+    cham_mod._ORIG_MTU.clear()
+    calls: list = []
+
+    def fake_run(cmd, *a, **k):
+        calls.append(cmd)
+        if cmd[:4] == ["ip", "-o", "link", "show"]:
+            return _cp(1, stdout="")  # MTU read FAILS (rc=1)
+        return _cp(0)
+
+    monkeypatch.setattr(cham_mod.subprocess, "run", fake_run)
+    cham_mod.toggle_chameleon("eth0", True)
+
+    assert ["ip", "link", "set", "dev", "eth0", "mtu", "1492"] not in calls, (
+        "must not shift an MTU whose original wasn't captured"
+    )
+    assert "eth0" not in cham_mod._ORIG_MTU
+
+
+def test_engage_reverts_mtu_when_mss_clamp_fails(monkeypatch):
+    """If the MSS clamp -A fails after the MTU was shifted, the MTU must be
+    reverted to its captured original (no half-changed state left behind)."""
+    cham_mod._ORIG_MTU.clear()
+    calls: list = []
+
+    def fake_run(cmd, *a, **k):
+        calls.append(cmd)
+        if cmd[:4] == ["ip", "-o", "link", "show"]:
+            return _cp(0, stdout="2: eth0: <BROADCAST> mtu 1400 qdisc fq_codel")
+        if "-C" in cmd:
+            return _cp(1)  # rule absent → engine will try -A
+        if "-A" in cmd:
+            return _cp(1)  # the MSS clamp add FAILS
+        return _cp(0)  # MTU sets and the rollback -D succeed
+
+    monkeypatch.setattr(cham_mod.subprocess, "run", fake_run)
+    status = cham_mod.toggle_chameleon("eth0", True)
+
+    assert ["ip", "link", "set", "dev", "eth0", "mtu", "1492"] in calls, "MTU was shifted"
+    assert ["ip", "link", "set", "dev", "eth0", "mtu", "1400"] in calls, (
+        "the shifted MTU must be reverted to the captured original on MSS failure"
+    )
+    assert "FAIL" in status.upper() or "ERROR" in status.upper()
+    assert "eth0" not in cham_mod._ORIG_MTU, "rollback must clear the capture record"
+
+
 def test_restore_does_not_touch_mtu_when_never_engaged(monkeypatch):
     # P9: calling _restore for an iface we never engaged must NOT set an MTU
     # (previously it guessed 1500, clobbering jumbo/VPN MTUs) — this makes it

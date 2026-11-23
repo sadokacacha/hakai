@@ -86,3 +86,58 @@ def test_engage_still_applies_mimic_values(monkeypatch):
     assert "net.ipv4.ip_default_ttl=128" in applied
     assert "net.ipv4.tcp_timestamps=0" in applied
     assert "MATCH" in status.upper()
+
+
+# ── MASQ-4 (C4): capture-or-None + rollback on partial engage failure ───────
+
+
+def test_engage_skips_key_whose_capture_failed(monkeypatch):
+    """A key whose `sysctl -n` capture fails must NOT be written (it couldn't be
+    restored) and must not be recorded as an original."""
+    masq_mod._ORIG.clear()
+    writes: list = []
+
+    def fake_run(cmd, *a, **k):
+        writes.append(cmd)
+        if cmd[:2] == ["sysctl", "-n"]:
+            # TTL capture fails (rc=1, empty); the other two capture fine.
+            if cmd[-1] == "net.ipv4.ip_default_ttl":
+                return subprocess.CompletedProcess(cmd, 1, "", "cannot stat")
+            return subprocess.CompletedProcess(cmd, 0, "64", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")  # every -w succeeds
+
+    monkeypatch.setattr(masq_mod.subprocess, "run", fake_run)
+    status = masq_mod.apply_stack_masquerade(True)
+
+    applied = [c[-1] for c in writes if c[:2] == ["sysctl", "-w"]]
+    assert not any("ip_default_ttl=" in w for w in applied), (
+        "a key whose original wasn't captured must never be mutated"
+    )
+    assert "net.ipv4.tcp_timestamps=0" in applied, "captured keys are still applied"
+    assert "net.ipv4.ip_default_ttl" not in masq_mod._ORIG
+    assert "MATCH" in status.upper()
+
+
+def test_engage_rolls_back_when_a_write_fails(monkeypatch):
+    """A mid-sequence `sysctl -w` failure must roll every already-applied key
+    back to its captured original and report the failure truthfully."""
+    masq_mod._ORIG.clear()
+    writes: list = []
+
+    def fake_run(cmd, *a, **k):
+        writes.append(cmd)
+        if cmd[:2] == ["sysctl", "-n"]:
+            return subprocess.CompletedProcess(cmd, 0, "64", "")  # all captures ok
+        # The last key applied (timestamps) fails to write.
+        if cmd[-1].startswith("net.ipv4.tcp_timestamps="):
+            return subprocess.CompletedProcess(cmd, 1, "", "operation not permitted")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(masq_mod.subprocess, "run", fake_run)
+    status = masq_mod.apply_stack_masquerade(True)
+
+    written = [c[-1] for c in writes if c[:2] == ["sysctl", "-w"]]
+    # ttl was applied as 128, then the rollback must put its captured 64 back.
+    assert "net.ipv4.ip_default_ttl=128" in written
+    assert "net.ipv4.ip_default_ttl=64" in written, "rollback must restore the captured original"
+    assert "ERROR" in status.upper() or "FAIL" in status.upper()
