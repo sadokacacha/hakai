@@ -3385,3 +3385,71 @@ lab network, against a device you own, verify:
    iface/gw/count/op/protection/last-error truthfully.
 9. **STEP 4**: `sudo python3 tools/bench_send.py <iface>` → record scapy vs raw
    pps; if not material, `git revert` the STEP-4 commit.
+
+---
+
+# Phase 2 (cont.) — ARP-3: targeted cut poisoned the whole segment
+
+**ID:** ARP-3  **Severity:** HIGH (correctness + collateral)  **File:** network/arp.py (flood builder, old lines ~316-319)
+
+**Symptom (user-reported):** "when I scan or cut someone it cuts on everyone."
+
+**Why it's wrong:** the ARP flood emitted, every 0.3 s, a *broadcast* gratuitous
+ARP — `Ether(dst=ff:ff:ff:ff:ff:ff) / ARP(op=2, hwsrc=my_mac, psrc=gateway,
+pdst=gateway)` — announcing to **every host on the segment** that the gateway's IP
+is at our MAC. That rewrites the gateway ARP entry subnet-wide, so a cut aimed at
+one device pulled the entire LAN's gateway-bound traffic through us. With the nft
+FORWARD chain dropping only the one target (and forwarding the rest), the practical
+result is a destabilised/offline segment — far beyond the selected target. The
+unresolved-MAC fallbacks (`else: ... dst=ff:ff:ff:ff:ff:ff`) had the same
+segment-wide effect for the gateway half.
+
+**Evidence:** old `l2_frames = [pkt_to_target_r, pkt_to_target_q, pkt_to_gw_r,
+pkt_to_gw_q, pkt_garp]`; `pkt_garp` is the broadcast gateway-spoof. A targeted cut
+only needs the two *unicast* pairs (target↔gateway).
+
+**Fix:** extracted a pure `ArpManager._build_l2_frames(ip, gateway, target_mac,
+gw_mac, my_mac)` that builds **unicast-only** poison frames (to target_mac and, if
+known, gw_mac) and emits **no broadcast frame**; if the gateway MAC is unresolved
+the gateway half is skipped rather than broadcast. The ICMP redirect (Packet C)
+was already unicast to the target (`dst=ip`) and is unchanged. Cut blast radius is
+now the target + gateway only.
+
+**Regression test:** tests/test_arp_cut_scope.py (4 cases) — asserts no broadcast
+frame, no segment-wide `psrc=gateway` claim, correct unicast target/gateway poison,
+and that an unknown gateway MAC skips rather than broadcasts. Pre-fix the broadcast
+GARP in the frame list fails the first two.
+
+**Verification (unit, mocked — no real packets):** `pytest -q` 177 passed;
+`ruff check .` clean; `ruff format --check` (changed files) clean; `mypy .` clean
+(73 source files). *Not verified on a live segment* (would require a lab network).
+
+---
+
+## Usage column reads 0 for all devices — diagnosis (not a counter bug)
+
+**Symptom (user-reported):** "usage is always 0 for all the products."
+
+**Finding:** the traffic wiring is correct and complete — `traffic.start()`
+(controller:111), `register_device` per device (controller:403/411),
+`nft.add_accounting` per device (controller:415), `traffic.nft = self.nft`
+(controller:77), and all three counter loops start. The RX/TX columns are *live
+speed* fed by `TrafficCounter.get()` → `_spd(self._rx[ip])`.
+
+Per-device bytes have exactly two sources: (1) nft FORWARD byte counters, which
+increment **only when the device's traffic transits this host** (ARP-MITM
+position); (2) the Scapy passive sniffer, which on a **switched** LAN sees only
+broadcast/multicast + our own traffic, never another host's unicast. In normal
+scan+cut operation nothing is ever forwarded through us (a cut *drops*, a restore
+sends the device straight back to the real gateway), so neither source produces
+bytes → the columns read 0. **This is a structural property of a switched segment,
+not a defect.** The counters populate only while actively MITM-monitoring a device
+(the dormant `spoof`/`monitor_device` path), which is the interception capability
+left unwired by scope.
+
+**Minor latent inconsistency noted (not user-facing here):** `get()` derives its
+*totals* from the nft counters only (`_rx_tot`), while `get_usage()` takes
+`max(nft, scapy_accumulator)`. On a hub / port-mirror / gateway-host deployment
+the passive sniffer *does* see bytes, and there the table total would still read 0
+while `get_usage()` would not. Left documented; changing the table to `get_usage()`
+would only matter in those non-switched deployments.

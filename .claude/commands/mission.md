@@ -26,3 +26,10 @@ Every finding has an ID, evidence and a regression test. `audit.md` current.
 reported honestly. Unverified behaviour listed. Diff reviewed cold.
 
 Start with `/p0`.
+
+## Output style
+- No preamble. Don't restate what you just did.
+- Report: what changed, evidence, next. Nothing else.
+- No closing question — pick the next step and do it.
+- Limits go in audit.md as one-line bullets, not an essay in the reply.
+- If a check fails, one line, then the fix.

