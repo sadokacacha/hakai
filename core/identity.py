@@ -306,7 +306,48 @@ def _is_junk_hostname(name: str) -> bool:
         return True
     if low in ("unix", "upnp device"):
         return True
+    # UUID / long hex blob — a UPnP UDN or Cast GUID, not a human name, e.g.
+    # "6dd60a51 4531 c5bb bdf8 5f6283e45d04" (sanitiser turns dashes to spaces).
+    if _re.fullmatch(
+        r"[0-9a-f]{8}[\s-][0-9a-f]{4}[\s-][0-9a-f]{4}[\s-][0-9a-f]{4}[\s-][0-9a-f]{12}", low
+    ):
+        return True
+    # A bare 32-hex blob with no separators (same UDN without grouping).
+    if _re.fullmatch(r"[0-9a-f]{32}", low):
+        return True
     return False
+
+
+# Identity labels that are placeholders, not a real device class — they must
+# never bury a real hostname in the device-name column.
+_PLACEHOLDER_IDENTITIES = frozenset(
+    {"", "?", "-", "unknown", "unknown device", "❓ scanning...", "scanning...", "generic device"}
+)
+
+
+def display_name(nickname: str, hostname: str, identity: str, vendor: str = "") -> str:
+    """Best human label for a device row — most device-identifying first.
+
+    A user nickname wins; then the real hostname (mDNS/DHCP/friendly service name)
+    — this is what tells devices apart, so it must beat the generic class label;
+    then the ``classify_device`` label ("Windows System") as a fallback; then the
+    vendor; else a placeholder. Junk hostnames (UUIDs, protocol noise) and
+    placeholder/"Scanning…" identities are skipped so they never win over a real
+    name. The IP/MAC columns remain the unique key; this is only the label.
+    """
+    nickname = (nickname or "").strip()
+    if nickname:
+        return nickname
+    hostname = (hostname or "").strip()
+    if hostname and not _is_junk_hostname(hostname):
+        return hostname
+    identity = (identity or "").strip()
+    if identity and identity.lower() not in _PLACEHOLDER_IDENTITIES:
+        return identity
+    vendor = (vendor or "").strip()
+    if vendor:
+        return vendor
+    return identity or "?"  # last resort: a placeholder like "❓ Scanning…", or "?"
 
 
 # Service types whose *instance* label is an app/generic name rather than a

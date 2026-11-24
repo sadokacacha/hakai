@@ -3541,3 +3541,46 @@ instance (`a1b2c3d4-….._googlecast._tcp.local`) is a service instance of an al
 service, so it passes the predicate and sanitises to a hex-ish label; it only
 surfaces when no friendly name/host record exists, and the friendly name wins when
 present. Could add uuid/hex-blob detection to `_is_junk_hostname` if it shows up.
+
+---
+
+# IDENT-2 — device-name column: class labels & UUID blobs buried real names
+
+From a live screenshot: the Name column showed "Windows System" / "Linux/Mobile
+Node" / "Private Device" repeated, "❓ Scanning..." stuck, and a UUID blob
+"6dd60a51 4531 C5bb Bdf8 5f6283e45d04"; the Vendor column was empty for every row.
+
+**Bugs:**
+1. **Naming priority inverted (ui/main_window.py).** Name was built as
+   `nickname OR identity OR hostname`, so the generic `classify_device` label
+   ("Windows System") and even the "❓ Scanning..." placeholder beat the real
+   hostname — real names never showed.
+   *Fix:* `core.identity.display_name(nickname, hostname, identity, vendor)` —
+   nickname → real hostname → non-placeholder class label → vendor → placeholder.
+2. **UUID/UDN blobs shown as names (core.identity._is_junk_hostname).** UPnP UDN /
+   Cast GUIDs ("6dd60a51 4531 c5bb …") weren't rejected.
+   *Fix:* reject grouped-UUID and bare-32-hex shapes; they now fall back to the
+   class label / vendor.
+3. **Vendor never resolved on first sight (core/controller.py:408).** The
+   new-device branch set `vendor = sanitize_vendor(dev.vendor)` (scanner vendor,
+   usually empty) and never called `get_vendor(dev.mac)` as the existing branch
+   does → blank Vendor until a device was seen twice.
+   *Fix:* `vendor = sanitize_vendor(get_vendor(dev.mac) or dev.vendor)` on first
+   sight too.
+
+**Root cause of empty Vendor (dependency gap, NOT fixed in code):**
+`mac-vendor-lookup` is not installed, so `core.oui.lookup_oui` falls back to two
+static dicts totalling **277** OUIs (135 + 142) — almost no real NIC resolves →
+"Unknown Device" → blanked by `sanitize_vendor`. The library integration already
+exists (optional import, `sync_vendor_db_bg`); it was never added to
+requirements. Fix 3 above only helps for the 277 known OUIs. Populating vendor
+for real needs either the library (adds a dep + a one-time online OUI fetch) or a
+bundled full OUI table — a product/dependency decision, flagged to the user.
+
+**Regression test:** tests/test_display_name.py (13 cases) — priority truth table
+(hostname beats class label, scanning placeholder never buries a name, vendor
+fallback) + UUID-blob rejection.
+
+**Verification (unit, mocked):** `pytest -q` 205 passed; `ruff check .` clean;
+`ruff format --check` (changed) clean; `mypy .` clean (75 source files). The UI
+wiring (display_name in the table) is static-checked, not screenshot-verified.

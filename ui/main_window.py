@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.identity import display_name
 from core.persistence import fmt_speed
 from system.network_manager import apply_static_config, get_connections, set_dhcp
 from ui.theme import ACCENT, GREEN, MUTED, PANEL, QSS, RED, STATE_STYLES, TEXT
@@ -355,11 +356,11 @@ class LanwardenWindow(QWidget):
         sel = self._selected_ip()
         self.table.setRowCount(len(devs))
         for r, d in enumerate(devs):
-            name = (
-                getattr(d, "nickname", "")
-                or getattr(d, "identity", "")
-                or getattr(d, "hostname", "")
-                or "?"
+            name = display_name(
+                getattr(d, "nickname", ""),
+                getattr(d, "hostname", ""),
+                getattr(d, "identity", ""),
+                getattr(d, "vendor", ""),
             )
             rx = getattr(d, "rx_speed", 0)
             tx = getattr(d, "tx_speed", 0)

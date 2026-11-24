@@ -405,7 +405,10 @@ class Controller:
                     if dev.hostname:
                         dev.hostname = sanitize_mdns_name(dev.hostname)
                     dev.last_seen = datetime.now().strftime("%H:%M:%S")
-                    dev.vendor = sanitize_vendor(dev.vendor)
+                    # Resolve vendor from the MAC on first sight too (the existing
+                    # branch already does; new devices previously got only the
+                    # scanner's vendor, usually empty → blank Vendor column).
+                    dev.vendor = sanitize_vendor(get_vendor(dev.mac) or dev.vendor)
                     self._apply_pending_identity(dev)
                     self.devices[ip] = dev
                     self.traffic.register_device(ip, dev.mac)
