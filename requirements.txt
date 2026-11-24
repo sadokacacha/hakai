@@ -5,6 +5,11 @@ scapy>=2.7.0
 # Replaced the CustomTkinter/Tk UI + Pillow in the STEP-5 rebuild.
 PySide6>=6.6.0
 pyqtgraph>=0.13.0
+# MAC → vendor resolution. Ships a bundled IEEE OUI table (works offline); the
+# static fallback in core/oui.py is only ~277 OUIs, so without this the Vendor
+# column is empty for almost every real device. Still imported behind try/except
+# (core/oui.py), so the app degrades gracefully if it is ever absent.
+mac-vendor-lookup>=0.1.15
 
 # ── Dev tooling (not needed to run the app; `pip install` for the gates) ──
 # Pinned to the versions the p8 gates are verified green against on Python
@@ -14,7 +19,5 @@ pyqtgraph>=0.13.0
 #   mypy==2.4.1
 
 # ── Optional (imported behind try/except; the app degrades gracefully) ──
-# Richer OUI/vendor resolution:
-#   mac-vendor-lookup
 # Linux-only XDP packet drop (needs BCC + clang/kernel headers):
 #   bcc

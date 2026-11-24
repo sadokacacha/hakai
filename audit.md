@@ -3584,3 +3584,43 @@ fallback) + UUID-blob rejection.
 **Verification (unit, mocked):** `pytest -q` 205 passed; `ruff check .` clean;
 `ruff format --check` (changed) clean; `mypy .` clean (75 source files). The UI
 wiring (display_name in the table) is static-checked, not screenshot-verified.
+
+---
+
+# IDENT-2 (cont.) — mac-vendor-lookup integrated as a sync downloader (not its async lookup)
+
+User chose to install mac-vendor-lookup for real vendor resolution. Installing it
+exposed a hang: `pytest` deadlocked on `test_controller_actions.py` because
+`Device.__init__` → `core.oui.lookup_oui` called the library's `lookup()`, which
+is **async** (asyncio + aiofiles + a per-call ThreadPoolExecutor) and, on a cache
+miss, **downloads from the IEEE site on the calling thread**. The faulthandler
+stack showed it stuck in `aiofiles`/`ThreadPoolExecutor` under the test's
+synchronous `Thread` double. In production the same path would block the UI/scan
+thread for seconds on first `Device()` (or hang offline) — a latent bug the
+install surfaced, not just a test artifact. (My earlier "works offline, no fetch"
+claim was wrong: the first lookups had downloaded the file via the network.)
+
+**Fix (core/oui.py):** use the library only as a *downloader*
+(`sync_vendor_db_bg` → `update_vendors`, already a startup daemon) and read its
+cached data file (`~/.cache/mac-vendors.txt`, `PREFIX:Vendor`, ~40 k prefixes)
+once, synchronously, into a plain dict (`_lib_prefixes()`), consulted before the
+277-entry static fallback. No asyncio, no per-call thread pool, no lookup-time
+download. Absent/undownloaded file → `{}` → static fallback (graceful offline).
+`sync_vendor_db_bg` drops the in-memory dict after a refresh so the next lookup
+reloads. Lookup now tries /36, /28, /24 hex prefixes.
+
+**Test fix (test_network_helpers.py::test_get_vendor_fallback_dict):** it asserted
+the exact static string "Apple Inc." and assumed static-before-library order. The
+full IEEE table is now consulted first (more complete/authoritative) and returns
+"Apple, Inc."; also the exact form depends on whether the optional file was
+downloaded, so the old assert was non-deterministic across environments. Changed
+to assert `"Apple" in …` (true for both sources).
+
+**requirements.txt:** `mac-vendor-lookup>=0.1.15` promoted from the optional
+comment block to an active dependency.
+
+**Verification:** `pytest -q` 205 passed (previously hung); the former-hanging
+`test_cut_device_reverts_state_when_arp_cut_fails` passes in 0.55 s; `ruff check .`
+clean; `ruff format --check` (changed) clean; `mypy .` clean (75 source files).
+Vendor resolution verified: Apple / Raspberry Pi OUIs resolve from the 40 554-entry
+dict; unknown MAC → "".

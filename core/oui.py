@@ -5,15 +5,26 @@ Split out of core/persistence.py: the storage module had no business carrying a
 35 k-prefix vendor database. This stays in the `core` layer because core/device
 and the scanner resolve vendors, and `core` must not import `network`.
 
-Lookup order: the mac-vendor-lookup library (most complete) if installed, else
-the two static tables below. The previous online lookup (api.macvendors.com) was
-removed — it leaked every LAN MAC to a third party and blocked the calling
-thread for up to 2 s per unknown device, and lookup runs on the scan hot path.
+Lookup order: the mac-vendor-lookup IEEE OUI table (~40 k prefixes) if its data
+file has been downloaded, else the two static tables below. The previous online
+lookup (api.macvendors.com) was removed — it leaked every LAN MAC to a third
+party and blocked the calling thread for up to 2 s per unknown device, and lookup
+runs on the scan hot path.
+
+IMPORTANT: we do NOT call ``mac_vendor_lookup``'s own ``lookup()`` — it is async
+(asyncio + aiofiles + a thread pool spun up per call) and, on a cache miss,
+downloads from the IEEE site on the *calling* thread. That would block the UI/scan
+thread for seconds on first use (or hang offline), and deadlocks under the
+synchronous Thread test doubles. Instead the library is used only as a downloader
+(``sync_vendor_db_bg`` → ``update_vendors``), and we read its cached data file
+(``PREFIX:Vendor`` lines) once, synchronously, into a plain dict for O(1) lookups.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import threading
 
 _log = logging.getLogger(__name__)
 
@@ -337,26 +348,68 @@ _FALLBACK_OUI = {
 }
 
 
+# Lazily-loaded IEEE OUI table from the mac-vendor-lookup data file, keyed by the
+# uppercase hex prefix (no separators). None = not loaded yet.
+_LIB_PREFIXES: dict[str, str] | None = None
+_LIB_LOCK = threading.Lock()
+
+
+def _lib_prefixes() -> dict[str, str]:
+    """Load the mac-vendor-lookup OUI file once, synchronously, into a dict.
+
+    Returns ``{}`` (static-fallback-only) when the file is absent (not yet
+    downloaded by ``sync_vendor_db_bg``) or unreadable, so lookups degrade
+    gracefully offline. Never triggers a download or the library's async path.
+    """
+    global _LIB_PREFIXES
+    if _LIB_PREFIXES is not None:
+        return _LIB_PREFIXES
+    with _LIB_LOCK:
+        if _LIB_PREFIXES is not None:  # filled while we waited for the lock
+            return _LIB_PREFIXES
+        prefixes: dict[str, str] = {}
+        path = getattr(_mlookup, "cache_path", "") if _mlookup is not None else ""
+        if path and os.path.isfile(path):
+            try:
+                with open(path, encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        prefix, sep, vendor = line.partition(":")
+                        vendor = vendor.strip()
+                        if sep and vendor:
+                            prefixes[prefix.strip().upper()] = vendor
+            except OSError as e:
+                _log.warning("oui: could not read vendor db %s: %s", path, e)
+        _LIB_PREFIXES = prefixes
+        return _LIB_PREFIXES
+
+
 def lookup_oui(mac: str) -> str:
     if not mac:
         return ""
 
-    if _MAC_VENDOR_LIB and _mlookup is not None:
-        try:
-            return _mlookup.lookup(mac)
-        except Exception:
-            pass
+    # IEEE table (downloaded file) — try /36, /28, /24 assignment prefixes.
+    lib = _lib_prefixes()
+    if lib:
+        hexstr = "".join(c for c in mac if c in "0123456789abcdefABCDEF").upper()
+        for n in (9, 7, 6):
+            vendor = lib.get(hexstr[:n])
+            if vendor:
+                return vendor
 
-    # Local static fallback only. Two static tables (P4-2): _OUI_DB uses
-    # upper-case keys, _FALLBACK_OUI lower-case. Checking both resolves the union
-    # of the formerly-split data.
+    # Local static fallback. Two static tables (P4-2): _OUI_DB uses upper-case
+    # keys, _FALLBACK_OUI lower-case. Checking both resolves the union.
     return _OUI_DB.get(mac.upper()[:8]) or _FALLBACK_OUI.get(mac.lower()[:8], "")
 
 
 def sync_vendor_db_bg():
-    """Call in a daemon thread — refreshes mac-vendor-lookup OUI DB from the internet."""
+    """Call in a daemon thread — downloads/refreshes the mac-vendor-lookup OUI
+    data file from the internet, then drops the in-memory cache so the next
+    lookup reloads the refreshed file."""
+    global _LIB_PREFIXES
     if _MAC_VENDOR_LIB and _mlookup is not None:
         try:
             _mlookup.update_vendors()
+            with _LIB_LOCK:
+                _LIB_PREFIXES = None  # force reload from the refreshed file
         except Exception:
-            pass
+            _log.debug("oui: vendor DB refresh failed", exc_info=True)

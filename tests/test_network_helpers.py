@@ -1,4 +1,5 @@
 """Tests for pure helpers in the network/ and system/ layers."""
+
 import collections
 
 from network.dhcp_sniffer import infer_os
@@ -9,16 +10,17 @@ from system.tc_manager import TCManager
 
 def test_infer_os_exact_signatures():
     assert infer_os([1, 3, 6, 15, 119, 252]) == "Apple/iOS (Modern)"
-    assert infer_os(
-        [1, 3, 6, 15, 31, 33, 43, 44, 46, 47, 119, 121, 249, 252]
-    ) == "Windows 11"
+    assert infer_os([1, 3, 6, 15, 31, 33, 43, 44, 46, 47, 119, 121, 249, 252]) == "Windows 11"
     assert infer_os([]) == "Generic Device"
 
 
 def test_get_vendor_fallback_dict():
-    # Prefix lookup happens before any optional library, so this is deterministic.
-    assert get_vendor("00:03:93:aa:bb:cc") == "Apple Inc."
-    assert get_vendor("00-03-93-aa-bb-cc") == "Apple Inc."  # dash form normalized
+    # A known Apple OUI must resolve to an Apple label. Assert membership, not an
+    # exact string: the full IEEE table (optional data file, "Apple, Inc.") is
+    # consulted before the static fallback dict ("Apple Inc."), so the exact form
+    # depends on whether the file has been downloaded — both contain "Apple".
+    assert "Apple" in get_vendor("00:03:93:aa:bb:cc")
+    assert "Apple" in get_vendor("00-03-93-aa-bb-cc")  # dash form normalized
 
 
 def test_is_randomized():
@@ -35,6 +37,7 @@ def test_tc_burst():
 
 def test_traffic_spd_window():
     import time
+
     tc = TrafficCounter()
     now = time.time()
     dq = collections.deque([(now, 5000)])
