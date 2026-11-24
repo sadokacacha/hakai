@@ -3453,3 +3453,47 @@ left unwired by scope.
 the passive sniffer *does* see bytes, and there the table total would still read 0
 while `get_usage()` would not. Left documented; changing the table to `get_usage()`
 would only matter in those non-switched deployments.
+
+---
+
+# Phase 2 (cont.) — IDENT-1: mDNS service-instance names shown as device hostnames
+
+**ID:** IDENT-1  **Severity:** MEDIUM (identity correctness / usability)
+**Files:** network/mdns_sniff.py (qd + an/ar paths), network/scanner.py (mDNS qd path)
+
+**Symptom (user-reported):** devices labelled "Spotify Desktop" and similar —
+"they are not legit… I can't know who is who."
+
+**Why it's wrong:** both mDNS parsers accepted *any* `.local` record name that did
+not start with `_` as the device hostname. A Spotify Connect announcement carries a
+service-*instance* record name like `Spotify Desktop._spotify-connect._tcp.local`;
+`sanitize_mdns_name` strips the `._service._proto` suffix and keeps the instance
+label → "Spotify Desktop". That is an app/zone label, not a host identity: it does
+not map to a physical device and **collides** (every Spotify client advertises the
+same string), so the table can't distinguish devices. The real hostname is the
+single-label A/AAAA record target (e.g. `Johns-Laptop.local`).
+
+**Evidence:** `mdns_sniff.py` old guards `if ".local" in qname and not
+qname.startswith("_")` (qd) and the identical an/ar guard; `scanner.py:217`
+`if ".local" in qname`. All three feed the instance label into the hostname.
+
+**Fix:** added `core.identity.is_mdns_host_record(raw)` — True only for a bare
+`<host>.local` record (single DNS label, no `._tcp`/`._udp` service tokens). Gated
+every mDNS *hostname* extraction in both parsers on it. Service-instance names are
+still consumed by the service-type → device-class mapping (so "Spotify Device"
+remains a class hint), they just no longer masquerade as the hostname. Real A-record
+hostnames (which iOS/most devices publish, e.g. `Ihebs-iPhone.local`) are unaffected.
+
+**Regression test:** tests/test_mdns_hostname_scope.py (14 cases) — predicate truth
+table + an end-to-end parse where a `_spotify-connect` instance must NOT yield a
+hostname (only a class hint) while a `Johns-Laptop.local` A-record must. Pre-fix the
+Spotify instance produced the hostname "Spotify Desktop", failing the assertion.
+
+**Verification (unit, mocked — crafted scapy packet, no live capture):**
+`pytest -q` 191 passed; `ruff check .` clean; `ruff format --check` (changed) clean;
+`mypy .` clean (74 source files).
+
+**Caveat:** hostnames already persisted to the sqlite device table from earlier runs
+(e.g. a saved "Spotify Desktop") would still reload; the fix prevents new captures
+from setting them. A one-time cleanup pass over persisted junk names could be added
+if the stale rows are a problem in practice.

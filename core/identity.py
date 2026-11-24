@@ -309,6 +309,31 @@ def _is_junk_hostname(name: str) -> bool:
     return False
 
 
+def is_mdns_host_record(raw: str) -> bool:
+    """True only for a bare ``<host>.local`` A/AAAA record name.
+
+    A device's real hostname in mDNS is the single-label target of its A/AAAA
+    record (e.g. ``Johns-Laptop.local``). A *service instance* name such as
+    ``Spotify Desktop._spotify-connect._tcp.local`` is an app/zone label, not a
+    host identity — it collides across devices (every Spotify client advertises
+    "Spotify Desktop") and must never be used as the hostname, only as a
+    device-class hint. The distinguishing feature: a host record is a single DNS
+    label (no interior dots, no ``_service._proto`` tokens) before ``.local``.
+
+    Gate every mDNS-derived *hostname* on this so service/app labels don't land
+    in the hostname column; the service-type → class mapping is handled
+    separately and still consumes the full name.
+    """
+    if not raw:
+        return False
+    s = raw.strip().rstrip(".").lower()
+    if not s.endswith(".local") or s.startswith("_"):
+        return False
+    label = s[:-6]  # drop the ".local" suffix
+    # Service instances always carry a '._tcp'/'._udp' token, i.e. interior dots.
+    return bool(label) and "." not in label
+
+
 def _clean_identity_candidate(label: str) -> str:
     if not label:
         return ""

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from scapy.all import DNS, IP
 
+from core.identity import is_mdns_host_record as _is_host_record
 from core.identity import sanitize_mdns_name as _sanitize
 
 # Maps service-type substrings to human-readable OS/class labels
@@ -93,8 +94,10 @@ def sniff_mdns_name(pkt, callback):
             qname_raw = q.qname.decode(errors="ignore").rstrip(".")
             qname = qname_raw.lower()
 
-            # 1. Extract hostname from  <name>.local queries
-            if ".local" in qname and not qname.startswith("_"):
+            # 1. Extract hostname ONLY from a bare <host>.local record — never a
+            # service-instance name like "Spotify Desktop._spotify-connect._tcp.local"
+            # (an app/zone label that collides across devices).
+            if _is_host_record(qname_raw):
                 name = _sanitize(qname_raw)
                 if name:
                     callback(ip, name, None)
@@ -117,8 +120,9 @@ def sniff_mdns_name(pkt, callback):
                     rname = rname.decode(errors="ignore").rstrip(".")
                 rname_l = rname.lower()
 
-                # Hostname from PTR / A record names
-                if ".local" in rname_l and not rname_l.startswith("_"):
+                # Hostname ONLY from a bare <host>.local A-record name — not a
+                # service-instance PTR/SRV name (app/zone label, not the device).
+                if _is_host_record(rname):
                     name = _sanitize(rname)
                     if name:
                         callback(ip, name, None)
