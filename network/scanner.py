@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 
 from core.device import Device
-from core.identity import _is_junk_hostname, is_mdns_host_record, sanitize_mdns_name
+from core.identity import _is_junk_hostname, is_identifying_mdns_name, sanitize_mdns_name
 from core.oui import lookup_oui
 
 # ── Hostname resolver pool ─────────────────────────────────────────────────────
@@ -216,7 +216,7 @@ class Scanner:
                     qname = pkt[DNS].qd.qname.decode(errors="ignore").strip(".")
                     # Only a bare <host>.local record is a hostname — not a
                     # service-instance label (e.g. "…._spotify-connect._tcp.local").
-                    if is_mdns_host_record(qname):
+                    if is_identifying_mdns_name(qname):
                         name = sanitize_mdns_name(qname)
                         ip = _get_ip(pkt)
                         if ip and name and not _is_junk_hostname(name):

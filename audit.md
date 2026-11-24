@@ -3497,3 +3497,47 @@ Spotify instance produced the hostname "Spotify Desktop", failing the assertion.
 (e.g. a saved "Spotify Desktop") would still reload; the fix prevents new captures
 from setting them. A one-time cleanup pass over persisted junk names could be added
 if the stale rows are a problem in practice.
+
+---
+
+# IDENT-1 (revised) — keep friendly device names, drop only colliding app labels
+
+**Correction to the first IDENT-1 fix.** The initial fix (`is_mdns_host_record`:
+accept only bare `<host>.local`) over-corrected — it also discarded *friendly*
+service-instance names (cast / AirPlay / Sonos / HomeKit), which for those devices
+are the ONLY place the owner's name is published (their A-record is an opaque GUID).
+User feedback: "I used to know where the TV is; now I don't." That is a real
+regression the first fix introduced.
+
+**Revised rule — `core.identity.is_identifying_mdns_name(raw)`:** a usable device
+name is a bare `<host>.local` record **or** a friendly service instance; rejected
+are pure service-type records and instances of app/generic services listed in
+`_NON_IDENTIFYING_SERVICES` (`_spotify-connect`, `_spotify`) whose label collides
+across devices. So:
+
+| mDNS name | result |
+|-----------|--------|
+| `Johns-Laptop.local` | ✅ "Johns Laptop" |
+| `Living Room TV._googlecast._tcp.local` | ✅ "Living Room TV" |
+| `Office Sonos._sonos._tcp.local` | ✅ "Office Sonos" |
+| `Iheb's-iPhone._apple-mobdev2._tcp.local` | ✅ "Iheb's iPhone" |
+| `Spotify Desktop._spotify-connect._tcp.local` | ❌ (class hint "Spotify Device" only) |
+| `_spotify-connect._tcp.local` | ❌ (pure service type) |
+
+Both parsers (mdns_sniff qd + an/ar, scanner qd) gate on it. `sanitize_mdns_name`
+extracts the friendly label; `_is_junk_hostname` still drops opaque/noise labels
+downstream.
+
+**Regression test:** tests/test_mdns_hostname_scope.py (15 cases) — truth table now
+asserts cast/AirPlay/Sonos/Apple instances are KEPT and only Spotify/pure-type
+rejected; end-to-end: a `_googlecast` friendly name is kept, a `_spotify-connect`
+label is dropped (class hint retained).
+
+**Verification (unit, mocked):** `pytest -q` 192 passed; `ruff check .` clean;
+`ruff format --check` (changed) clean; `mypy .` clean (74 source files).
+
+**Known minor edge (not fixed, low value):** a Chromecast's *non-friendly* GUID
+instance (`a1b2c3d4-….._googlecast._tcp.local`) is a service instance of an allowed
+service, so it passes the predicate and sanitises to a hex-ish label; it only
+surfaces when no friendly name/host record exists, and the friendly name wins when
+present. Could add uuid/hex-blob detection to `_is_junk_hostname` if it shows up.

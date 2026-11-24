@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from scapy.all import DNS, IP
 
-from core.identity import is_mdns_host_record as _is_host_record
+from core.identity import is_identifying_mdns_name as _is_device_name
 from core.identity import sanitize_mdns_name as _sanitize
 
 # Maps service-type substrings to human-readable OS/class labels
@@ -94,10 +94,11 @@ def sniff_mdns_name(pkt, callback):
             qname_raw = q.qname.decode(errors="ignore").rstrip(".")
             qname = qname_raw.lower()
 
-            # 1. Extract hostname ONLY from a bare <host>.local record — never a
-            # service-instance name like "Spotify Desktop._spotify-connect._tcp.local"
-            # (an app/zone label that collides across devices).
-            if _is_host_record(qname_raw):
+            # 1. Extract a device name — a <host>.local record or a friendly
+            # service instance (e.g. "Living Room TV._googlecast._tcp.local"),
+            # but never an app label that collides across devices ("Spotify
+            # Desktop._spotify-connect._tcp.local"). See is_identifying_mdns_name.
+            if _is_device_name(qname_raw):
                 name = _sanitize(qname_raw)
                 if name:
                     callback(ip, name, None)
@@ -120,9 +121,10 @@ def sniff_mdns_name(pkt, callback):
                     rname = rname.decode(errors="ignore").rstrip(".")
                 rname_l = rname.lower()
 
-                # Hostname ONLY from a bare <host>.local A-record name — not a
-                # service-instance PTR/SRV name (app/zone label, not the device).
-                if _is_host_record(rname):
+                # Device name from a host record or a friendly service instance
+                # (the only place a cast/AirPlay/Sonos name is published); app
+                # labels like Spotify are rejected. See is_identifying_mdns_name.
+                if _is_device_name(rname):
                     name = _sanitize(rname)
                     if name:
                         callback(ip, name, None)

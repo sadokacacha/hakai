@@ -309,29 +309,42 @@ def _is_junk_hostname(name: str) -> bool:
     return False
 
 
-def is_mdns_host_record(raw: str) -> bool:
-    """True only for a bare ``<host>.local`` A/AAAA record name.
+# Service types whose *instance* label is an app/generic name rather than a
+# device identity: it collides across devices (every Spotify client advertises
+# "Spotify Desktop"), so its instance must never be used as a hostname.
+_NON_IDENTIFYING_SERVICES = ("_spotify-connect", "_spotify")
 
-    A device's real hostname in mDNS is the single-label target of its A/AAAA
-    record (e.g. ``Johns-Laptop.local``). A *service instance* name such as
-    ``Spotify Desktop._spotify-connect._tcp.local`` is an app/zone label, not a
-    host identity — it collides across devices (every Spotify client advertises
-    "Spotify Desktop") and must never be used as the hostname, only as a
-    device-class hint. The distinguishing feature: a host record is a single DNS
-    label (no interior dots, no ``_service._proto`` tokens) before ``.local``.
 
-    Gate every mDNS-derived *hostname* on this so service/app labels don't land
-    in the hostname column; the service-type → class mapping is handled
-    separately and still consumes the full name.
+def is_identifying_mdns_name(raw: str) -> bool:
+    """True if an mDNS record name is usable as a *device* label.
+
+    Accepts:
+      - a bare ``<host>.local`` A/AAAA record (``Johns-Laptop.local``), and
+      - a service-*instance* name whose service identifies the device — the
+        friendly name its owner set. For cast / AirPlay / Sonos / HomeKit that
+        instance is the ONLY place the name is published (the A-record is an
+        opaque GUID), e.g. ``Living Room TV._googlecast._tcp.local`` →
+        "Living Room TV", ``Office Sonos._sonos._tcp.local`` → "Office Sonos".
+    Rejects:
+      - pure service-type records (``_spotify-connect._tcp.local``), and
+      - instances of app/generic services (``Spotify Desktop._spotify-connect.
+        _tcp.local``) whose label collides across devices and names no device.
+
+    ``sanitize_mdns_name`` extracts the friendly label; downstream
+    ``_is_junk_hostname`` still drops opaque/noise labels. Gate every
+    mDNS-derived hostname on this.
     """
     if not raw:
         return False
     s = raw.strip().rstrip(".").lower()
-    if not s.endswith(".local") or s.startswith("_"):
+    if not s.endswith(".local"):
         return False
-    label = s[:-6]  # drop the ".local" suffix
-    # Service instances always carry a '._tcp'/'._udp' token, i.e. interior dots.
-    return bool(label) and "." not in label
+    s = s[:-6]  # drop the ".local" suffix
+    if not s or s.startswith("_"):
+        return False  # empty or a pure service-type record
+    if "._tcp" in s or "._udp" in s:  # a service-instance name
+        return not any(svc in s for svc in _NON_IDENTIFYING_SERVICES)
+    return "." not in s  # a bare single-label host record
 
 
 def _clean_identity_candidate(label: str) -> str:
