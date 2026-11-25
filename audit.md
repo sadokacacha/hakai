@@ -3624,3 +3624,207 @@ comment block to an active dependency.
 clean; `ruff format --check` (changed) clean; `mypy .` clean (75 source files).
 Vendor resolution verified: Apple / Raspberry Pi OUIs resolve from the 40 554-entry
 dict; unknown MAC → "".
+
+---
+
+# ARP audit — network/arp.py vs. skill `performing-arp-spoofing-attack-simulation` — 2026-11-25
+
+Read-only gap audit (no fixes). Baseline: `.agents/skills/performing-arp-spoofing-attack-simulation/SKILL.md`
+(get_mac → spoof-loop → **restore real MAC bindings on exit** → disable ip_forward
+→ heal target ARP cache). Audited `network/arp.py` (573 lines) and its callers in
+`core/controller.py` / `system/netinfo.py`. Focus: what a *complete* intercept-and-restore
+engine covers that ours doesn't. Findings ordered by severity.
+
+## HIGH
+
+### A1 — IPv6 dual-stack: no Neighbor-Advertisement spoofing; intercept is IPv4-only
+- `network/arp.py` (entire module) poisons IPv4 ARP only. No ICMPv6 ND / NA spoofing of
+  the target's neighbor cache for the gateway's link-local address.
+- A dual-stack target keeps a working IPv6 path to the gateway during both **monitor** and
+  **cut**. For cut, IPv6 is blackholed *only* by an external XDP drop — `core/controller.py:494`
+  (`xdp.add_drop6`) — and *only* when recon previously captured `ipv6_ll`; `monitor_device`
+  (`core/controller.py:518`) poisons IPv4 ARP exclusively, so a monitored dual-stack host's
+  IPv6 traffic is never intercepted.
+- `network/ipv6.py` does segment-wide **RA** spoofing with a hard-coded documentation prefix
+  `2001:db8:1::` (`network/ipv6.py:86-87`) — not targeted NA, non-functional for real
+  interception, and wired as a separate manual UI toggle (`controller.py:130`), not coupled
+  to cut/spoof. **Severity: HIGH** (cut/monitor silently bypassed over IPv6 on dual-stack LANs).
+
+### A2 — No gateway/target MAC re-resolve on change (stale/empty MAC = silent dead cut)
+- The watchdog (`network/arp.py:534-573`) re-applies flood + arpspoof using MACs cached once
+  at `spoof()` time (`network/arp.py:80-89`); it never re-resolves.
+- Gateway MAC change (VRRP/HSRP failover, gateway reboot) or target MAC change (new NIC on
+  same IP) → poison keeps targeting a stale MAC; the cut shows "active" while traffic flows.
+- If `target_mac` was `""` at cut time (target offline during resolution), it stays `""`
+  forever: `spoof()` returns False at `network/arp.py:91-92` and nothing ever retries
+  resolution; the watchdog's flood-restart is gated on `my_mac` only (`arp.py:556`), not on a
+  (re)resolved target. **Severity: HIGH.**
+
+### A3 — restore_all() fan-out aborts on first failure; restore() skips cache-heal if DROP removal raises
+- `restore_all()` (`network/arp.py:149-153`) loops `self.restore(ip)` with **no per-IP
+  try/except**; the first IP whose restore raises aborts restoration of every remaining IP,
+  leaving later targets poisoned. The controller wraps the *whole* call in try/except
+  (`core/controller.py:322`), which contains the raise but does not resume the loop.
+- Within `restore()` (`network/arp.py:113-147`), `_remove_drop(ip)` at `:136` (→ `nft.uncut`)
+  is unguarded and precedes `_send_restore` at `:139`; an exception there skips the ARP
+  cache heal entirely → target left with a poisoned cache. **Severity: HIGH** (violates
+  CLAUDE.md "restore on every exit path, including partial failure" / "never leave rules behind").
+
+## MEDIUM
+
+### A4 — _send_restore requires BOTH MACs; no fallback heal when gw_mac is missing
+- `network/arp.py:516` and `:522` both gate on `target_mac and gw_mac`. If `gw_mac` is empty
+  but `target_mac` is known, **neither** corrective reply is sent — the target's cache is left
+  poisoned with no attempt (e.g. an op=1 request from the gateway IP to force the target to
+  re-resolve). Restore silently no-ops on the partial-knowledge path. **Severity: MEDIUM.**
+
+### A5 — Injected ICMP-redirect route never undone on restore
+- The flood injects an ICMP Redirect (`type=5, code=1, gw=my_ip`) at `network/arp.py:421`,
+  resent every loop (`:444-445`), installing a redirect host-route on the target toward us.
+- `_send_restore` (`network/arp.py:509-530`) corrects ARP only; it never clears the injected
+  redirect. After ARP heal the target can still route to us over IPv4 via the cached redirect.
+  **Severity: MEDIUM** (restore incomplete; network-state not fully restored).
+
+### A6 — ip_forward forced on, never restored by this module (capture-or-None violation)
+- `spoof()` unconditionally runs `sysctl -w net.ipv4.ip_forward=1` at `network/arp.py:95` with
+  no capture and no corresponding reset in `restore()`/`restore_all()`.
+- In the integrated app `system/netinfo.py` owns this (capture `:228`, set `:254`, restore
+  `:325`), but the module docstring and the `nft is None` path (`network/arp.py:50-52`)
+  explicitly contemplate **standalone** use, where ArpManager leaks `ip_forward=1`
+  permanently. Within the module it also breaks the project's capture-or-None rule.
+  **Severity: MEDIUM** (LOW inside the integrated flow where netinfo restores it).
+
+## LOW / NOTES
+
+### A7 — No self/gateway poison safeguard inside ArpManager
+- `cut()`/`spoof()` (`network/arp.py:65-111`) validate only that `ip` and `gateway` are valid
+  IPs; no check that `ip != my_ip` or `ip != gateway`. Self-protection lives only in the caller
+  (`core/controller.py:471-473`) and in blackout's neighbor pin (`arp.py:184-200`). A
+  standalone/direct caller could poison self or the gateway. **Severity: LOW** (defense-in-depth;
+  covered at controller layer in the shipping app).
+
+### A8 — promisc on/off symmetry: handled in netinfo, not here (informational)
+- `network/arp.py` never toggles promisc. Engage/restore symmetry lives in `system/netinfo.py`
+  (`_set_promisc(True)` `:255`; restore to **captured** original `:332`) and is correct. Note:
+  standalone ArpManager never enables promisc (Scapy L2 send still works). No gap in the
+  integrated flow.
+
+### A9 — Gratuitous ARP on engage/restore: unicast-by-design (informational)
+- Targeted cut emits **unicast** op=2 replies to target and gateway (`network/arp.py:367-384`),
+  deliberately *not* broadcast gratuitous ARP (rationale documented `:357-364` — avoids the
+  segment-wide poison bug fixed earlier). Restore mirrors with unicast corrective op=2 replies
+  — symmetric. Broadcast gratuitous ARP exists separately as `blackout_start` (`:207-213`) with
+  a broadcast heal on stop (`:250-253`). Covered; one minor note: no distinct pre-loop burst —
+  the first poison fires at loop entry, then every `ARP_INTERVAL`.
+
+### A10 — Repeat interval / drift
+- Loop uses `stop_evt.wait(self.ARP_INTERVAL)` *after* sending (`network/arp.py:448`), so the
+  effective period is `send_time + interval` — cadence stretches under load; no absolute
+  scheduling, no jitter. `ARP_INTERVAL` is re-read each iteration so `set_safe_mode`
+  (`:58-61`) applies live. No cumulative-drift bug. **Severity: LOW** (note only).
+
+### A11 — Watchdog keeps spinning after the last restore
+- Neither `restore()` nor `restore_all()` clears `_watchdog_running`; after the final cut is
+  lifted the watchdog thread keeps looping every `WATCHDOG_INTERVAL` over an empty dict until
+  `stop_watchdog()` is called (only in `core/controller.py:323`). Harmless spin, but the thread
+  outlives all cuts. **Severity: LOW.**
+
+## Coverage summary vs. the audit checklist
+| Checklist item | Status | Ref |
+|---|---|---|
+| Gratuitous ARP on engage & restore | COVERED (unicast by design) | A9 |
+| Restore on every exit path incl. partial failure | **GAP** | A3, A4 |
+| Gateway MAC re-resolve on change | **GAP (HIGH)** | A2 |
+| Dual-stack (IPv6 NA) | **GAP (HIGH)** | A1 |
+| Repeat interval & drift | minor note | A10 |
+| Promisc on/off symmetry | COVERED (in netinfo) | A8 |
+| ip_forward left in known state | **GAP** (standalone) / covered integrated | A6 |
+| Self not poisoned | partial (caller-only) | A7 |
+| ARP cache restoration on target | partial (both-MAC gated; redirect not healed) | A4, A5 |
+
+No code changed. Stopping here per request.
+
+---
+
+# ARP audit — FIXES APPLIED — 2026-11-25
+
+All 11 findings above addressed. Files: `network/arp.py`, `system/netinfo.py`,
+`core/controller.py`, `core/netutil.py`, `tests/test_controller_actions.py`,
+new `tests/test_arp_dualstack_restore.py`.
+
+### A1 — IPv6 dual-stack interception (NEW targeted NA-spoof engine)
+- `core/netutil.py`: added `valid_ip6()`.
+- `system/netinfo.py`: `NetInfo.gateway6` + Linux discovery via
+  `ip -6 route show default dev <iface>` (read-only, captured at detect time).
+- `network/arp.py`:
+  - `_build_na_frames()` — unicast ICMPv6 Neighbor-Advertisement poison of the
+    target↔gateway IPv6 pair (target's L2 MAC is shared across stacks, so the
+    ARP-resolved MACs are reused). Router flag set toward the target (R=1),
+    clear toward the gateway (R=0), Override set, **no multicast** (segment-safe,
+    mirrors `_build_l2_frames`). Empty when IPv6/addresses/MACs are missing.
+  - `cut()`/`spoof()` take `target_ip6`/`gateway_ip6`; `_start_flood` folds NA
+    frames into the same burst; `_send_restore` heals IPv6 with the real MACs.
+  - `core/controller.py`: `cut_device`/`monitor_device` pass
+    `target_ip6 = dev.recon_data["ipv6_ll"]`, `gateway_ip6 = net.gateway6`
+    (as **kwargs**, so the existing 4-positional spoof contract is preserved).
+
+### A2 — Gateway/target MAC re-resolve on change
+- `_watchdog` → `_maybe_reresolve(ip, info)`: re-resolves on a bounded cadence
+  (`RESOLVE_INTERVAL` 15 s, 30 s in safe mode) **or** immediately while a MAC is
+  missing; on change it updates `_cut_ips` and tears the flood down so the same
+  sweep rebuilds it with fresh MACs. `restore()` also re-resolves a missing MAC
+  before healing.
+
+### A3 — Restore on every exit path incl. partial failure
+- `restore()`: `_remove_drop` wrapped in try/except so an `nft.uncut` raise can
+  no longer skip the cache heal; deauth and `_send_restore` isolated too.
+- `restore_all()`: each `restore(ip)` isolated in try/except so one failing
+  target can't abort the rest; `_maybe_restore_forwarding()` as a final net.
+
+### A4 — Fallback heal when a MAC was never learned
+- `restore()` re-resolves target/gateway MACs when either is empty before
+  `_send_restore`, so the corrective replies carry real addresses.
+
+### A5 — Injected ICMP-redirect route undone on restore
+- `_send_restore` now sends `ICMP type=5 code=1 gw=<real gateway>` so the
+  target's gateway host-route points back at the real gateway.
+
+### A6 — ip_forward captured and restored (capture-or-None)
+- `_enable_forwarding()` captures the pre-change value once (`_orig_ip_forward`),
+  `_maybe_restore_forwarding()` writes it back only when no cuts remain and
+  clears the capture. No-op/consistent in the integrated flow where
+  `system/netinfo.py` also owns it.
+
+### A7 — Self/gateway poison safeguard inside ArpManager
+- `spoof()` returns False (before resolving MACs) when `ip == gateway` or
+  `ip == my_ip`.
+
+### A10 — Interval drift
+- Flood loop now paces on an absolute `ARP_INTERVAL` grid (deadline-based
+  `stop_evt.wait`), resyncing if it falls behind, instead of "interval after the
+  previous burst finished".
+
+### A11 — Watchdog idle-stop
+- `restore()` clears `_watchdog_running` once `_cut_ips` is empty (restarts on
+  the next `spoof()`).
+
+### A8 / A9 — no change (correct as-is)
+- Promisc symmetry remains owned by `system/netinfo.py` (capture→on→restore).
+- Gratuitous-ARP-on-engage stays deliberately unicast (segment-safe); restore is
+  the symmetric unicast heal.
+
+## Verification (actual output)
+```
+$ pytest -q
+228 passed in 1.28s          # +10 new tests (tests/test_arp_dualstack_restore.py)
+$ ruff check  network/arp.py core/controller.py core/netutil.py system/netinfo.py tests/...
+All checks passed!
+$ ruff format --check <same files>
+6 files already formatted
+$ mypy network/arp.py core/controller.py core/netutil.py system/netinfo.py
+Success: no issues found in 4 source files
+```
+Note: `ruff check .` / `ruff format --check` report repo-wide noise from the
+untracked `.agents/skills/` tree (thousands of vendored skill files); the changed
+project files are clean (scoped runs above). Lab packet-level verification of the
+IPv6 NA poison/heal still requires an authorized dual-stack lab (not run here).

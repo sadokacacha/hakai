@@ -24,6 +24,14 @@ def valid_ip(addr: str) -> bool:
     return True
 
 
+def valid_ip6(addr: str) -> bool:
+    """True if addr is a valid IPv6 address literal (link-local or global)."""
+    try:
+        return isinstance(ipaddress.ip_address(addr), ipaddress.IPv6Address)
+    except ValueError:
+        return False
+
+
 def valid_cidr(addr: str) -> bool:
     """True if addr is a host address with an optional prefix (e.g. 192.168.1.5/24)."""
     try:

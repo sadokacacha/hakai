@@ -24,13 +24,14 @@ from system.netinfo import NetInfo
 
 
 class _SyncThread:
-    def __init__(self, target=None, args=(), daemon=None, name=None):
+    def __init__(self, target=None, args=(), kwargs=None, daemon=None, name=None):
         self._target = target
         self._args = args
+        self._kwargs = kwargs or {}
 
     def start(self):
         if self._target:
-            self._target(*self._args)
+            self._target(*self._args, **self._kwargs)
 
 
 def _ctrl(monkeypatch):

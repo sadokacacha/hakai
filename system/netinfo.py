@@ -16,6 +16,7 @@ import socket
 import subprocess
 from dataclasses import dataclass, field
 
+from core.netutil import valid_ip6
 from core.osutil import IS_WINDOWS as _IS_WINDOWS
 
 _log = logging.getLogger(__name__)
@@ -95,6 +96,7 @@ def _read_offloads(iface: str) -> dict[str, str]:
 class NetInfo:
     iface: str = ""
     gateway: str = ""
+    gateway6: str = ""  # IPv6 default-router address (link-local), for dual-stack cuts
     my_ip: str = ""
     my_mac: str = ""
     subnet: str = ""
@@ -189,6 +191,21 @@ def _detect_network_linux(preferred_iface: str = "auto") -> NetInfo:
 
     if not info.iface:
         return info
+
+    # ── IPv6 default router (for dual-stack cuts) ─────────────────────────
+    # Captured read-only; used by ArpManager to poison the target↔gateway
+    # IPv6 neighbour pair so a cut isn't silently bypassed over IPv6.
+    route6_out = _run("ip", "-6", "route", "show", "default", "dev", info.iface)
+    for line in route6_out.splitlines():
+        parts = line.split()
+        if "via" in parts:
+            try:
+                cand = parts[parts.index("via") + 1]
+            except (ValueError, IndexError):
+                continue
+            if valid_ip6(cand):
+                info.gateway6 = cand
+                break
 
     # ── My IP + subnet ────────────────────────────────────────────────────
     addr_out = _run("ip", "-4", "addr", "show", info.iface)

@@ -477,8 +477,18 @@ class Controller:
         # Zero speed display immediately — don't wait for the 3-s window to drain
         self.traffic.mark_cut(ip)
 
+        target_ip6 = dev.recon_data.get("ipv6_ll", "")
+        gateway_ip6 = getattr(self.net, "gateway6", "")
+
         def _do():
-            ok = self.arp.cut(ip, self.net.gateway, self.net.iface, self.net.my_ip)
+            ok = self.arp.cut(
+                ip,
+                self.net.gateway,
+                self.net.iface,
+                self.net.my_ip,
+                target_ip6=target_ip6,
+                gateway_ip6=gateway_ip6,
+            )
             if not ok:
                 # The cut failed — revert the optimistic state so the row doesn't
                 # lie (🔒 CUT / BLOCKED) about a device that still has connectivity.
@@ -517,6 +527,10 @@ class Controller:
         threading.Thread(
             target=self.arp.spoof,
             args=(ip, self.net.gateway, self.net.iface, self.net.my_ip),
+            kwargs={
+                "target_ip6": dev.recon_data.get("ipv6_ll", ""),
+                "gateway_ip6": getattr(self.net, "gateway6", ""),
+            },
             daemon=True,
         ).start()
         if log:
