@@ -3828,3 +3828,77 @@ Note: `ruff check .` / `ruff format --check` report repo-wide noise from the
 untracked `.agents/skills/` tree (thousands of vendored skill files); the changed
 project files are clean (scoped runs above). Lab packet-level verification of the
 IPv6 NA poison/heal still requires an authorized dual-stack lab (not run here).
+
+---
+
+# ARP audit — LAB VERIFICATION CHECKLIST (run in an AUTHORIZED, ISOLATED lab only)
+
+Prereqs: root on the Lanwarden host; one test target (dual-stack) and the real
+gateway on the SAME isolated L2 segment; a second capture box or tcpdump on the
+host. Record actual output next to each step. **Do not run on production.**
+
+Baseline capture (keep running throughout):
+```
+tcpdump -i <iface> -n -e 'arp or icmp6' -w /tmp/arp_audit.pcap
+```
+
+## A1 — IPv6 dual-stack cut
+1. On target: `ip -6 neigh show` → note gateway LL → real gateway MAC.
+2. Host: cut the target from the UI (or `arp.cut(ip, gw, iface, my_ip,
+   target_ip6=<tgt LL>, gateway_ip6=<gw LL>)`).
+3. On target: `ip -6 neigh show <gw LL>` → MAC must now be the HOST's MAC.
+4. On target: `ping6 <gw LL>` and an external IPv6 → must fail/route via host.
+   Confirms the pre-fix IPv6 bypass is closed.
+5. Restore → `ip -6 neigh show <gw LL>` returns to the real gateway MAC;
+   IPv6 connectivity recovers. (A1 + IPv6 half of A3/A4.)
+
+## A2 — MAC re-resolve on change
+1. Cut the target; confirm poison active.
+2. Change the gateway's MAC (or fail it over / swap the target NIC on same IP).
+3. Within ~RESOLVE_INTERVAL (15 s) the flood must retarget the NEW MAC
+   (grep the pcap for poison frames to the new dst); the cut stays effective.
+4. Edge: cut a target that is OFFLINE, then bring it online → watchdog should
+   resolve and begin poisoning (nft DROP already enforced the cut meanwhile).
+
+## A3 — restore never fails open
+1. Cut several targets. Simulate an nft failure on one
+   (e.g. `nft flush ruleset` mid-run, or stub uncut) and call Restore All.
+2. Every target's ARP/NA cache must be healed regardless of the nft error;
+   no target left pointing at the host MAC. Check pcap for the corrective replies.
+
+## A4 — heal with a MAC never learned
+1. Cut a target whose gateway MAC failed to resolve at cut time.
+2. Restore → confirm a fresh resolve happens and corrective ARP is sent with the
+   real gateway MAC (target cache healed).
+
+## A5 — ICMP redirect undone
+1. During a cut, on target: `ip route get <external IP>` → may show a redirect
+   via the host.
+2. Restore → a corrective ICMP redirect (gw = real gateway) is sent;
+   `ip route get` no longer points at the host (allow redirect cache to clear).
+
+## A6 — ip_forward restored
+```
+sysctl net.ipv4.ip_forward           # before: note value
+# run a standalone cut via ArpManager (no netinfo engage), then restore_all()
+sysctl net.ipv4.ip_forward           # after: must equal the before value
+```
+
+## A7 — self/gateway guard
+Attempt `arp.spoof(my_ip, gw, iface, my_ip)` and `arp.spoof(gw, gw, …)` →
+both return False, no packets emitted (check pcap is silent).
+
+## A10 — interval cadence
+Cut a target under host CPU load; in the pcap, poison-burst spacing stays ~0.3 s
+(1.0 s in safe mode), no cumulative drift.
+
+## A11 — watchdog idle-stop
+After Restore All, confirm the `arp_watchdog` thread exits (no further sweeps);
+a new cut restarts it.
+
+## Regression gate (host, no lab needed)
+```
+pytest -q            # expect: all passing (228 at time of writing)
+ruff check <changed files> ; ruff format --check <changed files>
+mypy network/arp.py core/controller.py core/netutil.py system/netinfo.py
+```
