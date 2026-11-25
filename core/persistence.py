@@ -202,6 +202,17 @@ class Persistence:
     def get(self, key: str, default=None):
         return self.cfg.get(key, DEFAULT_CFG.get(key, default))
 
+    def set(self, key: str, value) -> None:
+        """Persist an arbitrary JSON-serialisable config value (e.g. UI table
+        column widths / sort order). Mirrors save_config for a single key."""
+        with self._lock:
+            self.cfg[key] = value
+            self._conn.execute(
+                "INSERT OR REPLACE INTO config(key, value) VALUES(?, ?)",
+                (key, json.dumps(value)),
+            )
+            self._conn.commit()
+
     # ── operation log ──────────────────────────────────────────────────────────
 
     def log_operation(self, op: str, ip: str = "", detail: str = "") -> None:
