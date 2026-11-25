@@ -15,3 +15,6 @@ env/
 
 # Hakai runtime state (lives in ~/.sadok_hakai by default; ignore any local copy)
 .sadok_hakai/
+
+# Vendored skills library — materialized from skills-lock.json, not committed
+.agents/
