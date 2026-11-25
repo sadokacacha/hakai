@@ -48,6 +48,41 @@ def _add_device(ctrl, ip="192.168.1.100"):
     return dev
 
 
+def test_toggle_blackout_engages_and_lifts(monkeypatch):
+    ctrl = _ctrl(monkeypatch)
+    ctrl.nft = MagicMock()
+    ctrl.arp.blackout_start = MagicMock(return_value=True)
+    ctrl.arp.blackout_stop = MagicMock()
+
+    assert ctrl.toggle_blackout(True) is True
+    assert ctrl.blackout_active is True
+    ctrl.nft.blackout.assert_any_call(True)
+    ctrl.arp.blackout_start.assert_called_once()
+
+    assert ctrl.toggle_blackout(False) is True
+    assert ctrl.blackout_active is False
+    ctrl.arp.blackout_stop.assert_called_once()
+    ctrl.nft.blackout.assert_any_call(False)
+
+
+def test_toggle_blackout_disarms_drop_if_poison_fails(monkeypatch):
+    ctrl = _ctrl(monkeypatch)
+    ctrl.nft = MagicMock()
+    ctrl.arp.blackout_start = MagicMock(return_value=False)  # can't resolve gateway MAC
+
+    assert ctrl.toggle_blackout(True) is False
+    assert ctrl.blackout_active is False
+    # the FORWARD drop must be lifted so we don't leave a half-armed blackout
+    ctrl.nft.blackout.assert_any_call(False)
+
+
+def test_toggle_blackout_needs_gateway(monkeypatch):
+    ctrl = Controller(NetInfo(iface="eth0", gateway=""))
+    monkeypatch.setattr(controller_mod, "db", MagicMock())
+    assert ctrl.toggle_blackout(True) is False
+    assert ctrl.blackout_active is False
+
+
 def test_cut_device_reverts_state_when_arp_cut_fails(monkeypatch):
     ctrl = _ctrl(monkeypatch)
     dev = _add_device(ctrl)

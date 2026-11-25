@@ -144,3 +144,66 @@ def test_windows_is_noop(monkeypatch):
     f.cut("1.2.3.4")
     f.add_accounting("1.2.3.4")
     assert rec == []
+
+
+# ── Blackout (segment-wide catch-all FORWARD DROP) ──────────────────────────
+
+
+def _blackout_rule(handle):
+    return {
+        "rule": {
+            "chain": "forward",
+            "handle": handle,
+            "comment": "lanwarden_blackout",
+            "expr": [{"drop": None}],
+        }
+    }
+
+
+def test_blackout_inserts_catch_all_drop(monkeypatch):
+    monkeypatch.setattr(nf, "_IS_WINDOWS", False)
+    rec: list = []
+    f = NftFilter(run=_runner(list_payload="", record=rec))  # empty chain
+    assert f.blackout(True) is True
+    inserts = [c for c in rec if "insert" in c and "rule" in c]
+    assert len(inserts) == 1, "one catch-all drop inserted at the top"
+    c = inserts[0]
+    assert "drop" in c and "lanwarden_blackout" in c
+    assert "saddr" not in c and "daddr" not in c, "catch-all: matches every forwarded packet"
+
+
+def test_blackout_is_idempotent(monkeypatch):
+    monkeypatch.setattr(nf, "_IS_WINDOWS", False)
+    payload = json.dumps({"nftables": [_blackout_rule(5)]})  # already present
+    rec: list = []
+    f = NftFilter(run=_runner(list_payload=payload, record=rec))
+    assert f.blackout(True) is True
+    assert not any("insert" in c for c in rec), "must not stack a second blackout rule"
+
+
+def test_blackout_off_deletes_only_blackout_by_handle(monkeypatch):
+    monkeypatch.setattr(nf, "_IS_WINDOWS", False)
+    payload = json.dumps({"nftables": [_blackout_rule(5), _cut_rule("1.2.3.4", "saddr", 7)]})
+    rec: list = []
+    f = NftFilter(run=_runner(list_payload=payload, record=rec))
+    assert f.blackout(False) is True
+    deletes = [c for c in rec if "delete" in c and "rule" in c]
+    handles = {c[c.index("handle") + 1] for c in deletes}
+    assert handles == {"5"}, "only the blackout handle deleted; the cut rule is untouched"
+    assert not any("flush" in c for c in rec)
+
+
+def test_blackout_windows_is_noop(monkeypatch):
+    monkeypatch.setattr(nf, "_IS_WINDOWS", True)
+    rec: list = []
+    f = NftFilter(run=_runner(record=rec))
+    assert f.blackout(True) is False
+    assert rec == []
+
+
+def test_blackout_table_is_swept_on_hard_kill():
+    # The blackout rule lives in the lanwarden table, which the startup sweep
+    # deletes wholesale — so a hard kill can't leave the segment blackholed.
+    from system import sweep
+
+    assert ("inet", nf.TABLE) in sweep._ORPHAN_NFT_TABLES

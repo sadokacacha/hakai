@@ -42,6 +42,7 @@ FAMILY = "inet"
 CHAIN = "forward"
 _CUT = "lanwarden_cut"
 _ACCT = "lanwarden_acct"
+_BLACKOUT = "lanwarden_blackout"
 
 Run = Callable[..., subprocess.CompletedProcess]
 
@@ -166,6 +167,52 @@ class NftFilter:
     def remove_all_accounting(self) -> None:
         for ip in list(self._acct_ips):
             self.remove_accounting(ip)
+
+    # ── Blackout (segment-wide FORWARD DROP) ──────────────────────────────────
+
+    def blackout(self, enable: bool) -> bool:
+        """Insert/remove a catch-all DROP at the TOP of the forward chain.
+
+        The segment blackout broadcast-poisons every host's gateway entry to our
+        MAC, so the whole segment's gateway-bound traffic is routed to us; this
+        rule drops every forwarded packet so it's blackholed. The operator's own
+        traffic is locally generated (OUTPUT, not forward), so it is unaffected.
+        Tagged ``lanwarden_blackout`` and living in the ``lanwarden`` table, so a
+        startup sweep (which deletes that table) clears an orphan after a hard
+        kill. Idempotent; removal is by exact handle, never a flush.
+        """
+        if _IS_WINDOWS:
+            return False
+        if enable:
+            self.ensure()
+            if self._has_blackout():
+                return True
+            r = _nft(
+                self._run, "insert", "rule", FAMILY, TABLE, CHAIN, "drop", "comment", _BLACKOUT
+            )
+            if r.returncode != 0:
+                _log.warning("nft_filter: blackout enable failed: %s", r.stderr.strip())
+                return False
+            return True
+        self._delete_blackout()
+        return True
+
+    def _has_blackout(self) -> bool:
+        return any(rule.get("comment") == _BLACKOUT for rule in self._list_rules())
+
+    def _delete_blackout(self) -> None:
+        for rule in self._list_rules():
+            if rule.get("comment") == _BLACKOUT and rule.get("handle") is not None:
+                _nft(
+                    self._run,
+                    "delete",
+                    "rule",
+                    FAMILY,
+                    TABLE,
+                    CHAIN,
+                    "handle",
+                    str(rule["handle"]),
+                )
 
     # ── Counters ──────────────────────────────────────────────────────────────
 

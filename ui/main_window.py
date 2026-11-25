@@ -57,6 +57,7 @@ class LanwardenWindow(QWidget):
         self._active_op = "—"
         self._last_error = "—"
         self._last_alert = "—"
+        self._blackout_confirmed = False  # confirm dialog shown once per session
         # Protection alerts land here from the protector's sniffer thread. A
         # deque is the only cross-thread touch — never a Qt call off the GUI
         # thread (that flooded Qt during an ARP storm and could crash).
@@ -182,6 +183,14 @@ class LanwardenWindow(QWidget):
         rest_all.clicked.connect(self._do_restore_all)
         lay.addWidget(cut_all)
         lay.addWidget(rest_all)
+        lay.addSpacing(8)
+        self.btn_blackout = QPushButton("⬛ BLACKOUT SEGMENT", objectName="Danger")
+        self.btn_blackout.setToolTip(
+            "Every device on this segment loses the gateway, including devices not in "
+            "the list. Your own connection stays up."
+        )
+        self.btn_blackout.clicked.connect(self._do_blackout)
+        lay.addWidget(self.btn_blackout)
         lay.addStretch(1)
         return w
 
@@ -312,11 +321,17 @@ class LanwardenWindow(QWidget):
         self.sb_count = QLabel()
         self.sb_op = QLabel()
         self.sb_prot = QLabel()
+        self.sb_blackout = QLabel()
         self.sb_alert = QLabel()
         self.sb_err = QLabel()
         for lbl in (self.sb_iface, self.sb_gw, self.sb_count, self.sb_op, self.sb_prot):
             lbl.setStyleSheet(f"color:{MUTED};border-right:1px solid #2a313c;padding:0 8px;")
             lay.addWidget(lbl)
+        # Blackout is a mode, shown distinctly from per-device cut state.
+        self.sb_blackout.setStyleSheet(
+            f"color:{RED};font-weight:bold;border-right:1px solid #2a313c;padding:0 8px;"
+        )
+        lay.addWidget(self.sb_blackout)
         self.sb_alert.setStyleSheet(f"color:{RED};border-right:1px solid #2a313c;padding:0 8px;")
         lay.addWidget(self.sb_alert)
         self.sb_err.setStyleSheet(f"color:{MUTED};padding:0 8px;")
@@ -400,6 +415,8 @@ class LanwardenWindow(QWidget):
         if getattr(self.ctrl, "stealth_active", False):
             prot.append("stealth")
         self.sb_prot.setText("protection: " + (", ".join(prot) if prot else "none"))
+        blackout = getattr(self.ctrl, "blackout_active", False)
+        self.sb_blackout.setText("⬛ SEGMENT BLACKOUT" if blackout else "")
         self.sb_alert.setText("" if self._last_alert == "—" else f"⚠ {self._last_alert}")
         self.sb_err.setText(f"last error: {self._last_error}")
         self.btn_arp.setText(
@@ -410,6 +427,7 @@ class LanwardenWindow(QWidget):
         )
         self.btn_ghost.setText(f"👻 Ghost Firewall: {'ON' if self.ctrl.firewall.active else 'OFF'}")
         self.btn_nuke.setText(f"☢ Nuclear Stealth: {'ON' if self.ctrl.stealth_active else 'OFF'}")
+        self.btn_blackout.setText("⬛ BLACKOUT: ON" if blackout else "⬛ BLACKOUT SEGMENT")
 
     def _drain_alerts(self) -> None:
         """Drain protection alerts queued by the (off-GUI-thread) protector and
@@ -507,6 +525,22 @@ class LanwardenWindow(QWidget):
     def _do_restore_all(self) -> None:
         self.set_state("restoring")
         self._run(self.ctrl.restore_all, op="restore_all")
+
+    def _do_blackout(self) -> None:
+        want_on = not getattr(self.ctrl, "blackout_active", False)
+        # Confirm once per session, then free toggling.
+        if want_on and not self._blackout_confirmed:
+            resp = QMessageBox.question(
+                self,
+                "Confirm segment blackout",
+                "Blackout segment — every device on this segment loses the gateway, "
+                "including devices not in the list. Your own connection stays up.\n\n"
+                "Active segment-wide MITM — authorized, isolated lab only.",
+            )
+            if resp != QMessageBox.Yes:
+                return
+            self._blackout_confirmed = True
+        self._run(self.ctrl.toggle_blackout, want_on, op="blackout")
 
     # ── Keeper actions ──────────────────────────────────────────────────────────────
 

