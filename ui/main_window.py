@@ -80,17 +80,82 @@ class LanwardenWindow(QWidget):
         self.ctrl.set_alert_callback(self._alert_q.append)
 
     def _assess_capabilities(self) -> None:
-        """Reflect real state at startup instead of always claiming 'normal':
-        disconnected without an iface/gateway, degraded without nft/tc."""
-        import shutil
+        """Reflect real, OS-aware state at startup via the capability registry.
+
+        Disconnected without an iface/gateway; degraded only when a *monitoring*
+        capability that this OS supports is unavailable (a missing dependency or
+        elevation). Interception being Linux-only on Windows is expected and does
+        NOT mark the app degraded — it is reported in the Capabilities panel.
+        """
+        from core.capabilities import MONITOR, get_capabilities
+
+        self._caps = get_capabilities()
+        self._update_caps_indicator()
 
         net = self.ctrl.net
         if not net.iface or not net.gateway:
             self.set_state("disconnected", "no interface / gateway")
             return
-        missing = [b for b in ("nft", "tc") if not shutil.which(b)]
-        if missing:
-            self.set_state("degraded", "missing: " + ", ".join(missing))
+        mon_blocked = [
+            c
+            for c in self._caps.values()
+            if c.category == MONITOR and c.supported_on_this_os and not c.available
+        ]
+        if mon_blocked:
+            self.set_state("degraded", "limited: " + ", ".join(c.title for c in mon_blocked))
+
+        # Honest controls: if interception is not supported on this OS (Windows),
+        # disable the Warden/Keeper nav tabs rather than showing live buttons that
+        # would fail. The Capabilities panel explains why (Linux-only).
+        arp = self._caps.get("arp_cut")
+        if arp is not None and not arp.supported_on_this_os:
+            for idx in (1, 2):  # 1 = Warden, 2 = Keeper
+                btn = self._nav_group.button(idx)
+                if btn is not None:
+                    btn.setEnabled(False)
+                    btn.setToolTip("Interception is Linux-only — see ⚙ caps")
+
+    def _update_caps_indicator(self) -> None:
+        """Compact 'monitor n/m' pill in the status bar, click opens the panel."""
+        from core.capabilities import MONITOR
+
+        caps = getattr(self, "_caps", {})
+        mon = [c for c in caps.values() if c.category == MONITOR and c.supported_on_this_os]
+        ok = sum(1 for c in mon if c.available)
+        total = len(mon)
+        colour = GREEN if ok == total else RED
+        self.sb_caps.setText(f"⚙ caps {ok}/{total}")
+        self.sb_caps.setStyleSheet(f"color:{colour};border-right:1px solid #2a313c;padding:0 8px;")
+
+    def _capabilities_report(self) -> str:
+        """Human-readable capability report grouped by category (for the panel)."""
+        from core.capabilities import DIAGNOSTIC, INTERCEPTION, MONITOR, get_capabilities
+
+        caps = getattr(self, "_caps", None) or get_capabilities()
+        headings = [
+            (MONITOR, "Monitoring"),
+            (DIAGNOSTIC, "Diagnostics"),
+            (INTERCEPTION, "Interception (Linux-only)"),
+        ]
+        lines: list[str] = []
+        for cat, title in headings:
+            lines.append(f"── {title} ──")
+            for c in (x for x in caps.values() if x.category == cat):
+                mark = "✓" if c.available else "✗"
+                row = f"  {mark} {c.title}"
+                if not c.available:
+                    row += f"\n      {c.reason}\n      → {c.remedy}"
+                lines.append(row)
+            lines.append("")
+        return "\n".join(lines).rstrip()
+
+    def _show_capabilities(self) -> None:
+        box = QMessageBox(self)
+        box.setWindowTitle("Lanwarden — Capabilities")
+        box.setIcon(QMessageBox.Information)
+        box.setText("What works on this system, and how to enable the rest:")
+        box.setInformativeText(self._capabilities_report())
+        box.exec()
 
     # ── layout ──────────────────────────────────────────────────────────────────
 
@@ -336,6 +401,14 @@ class LanwardenWindow(QWidget):
         lay.addWidget(self.sb_alert)
         self.sb_err.setStyleSheet(f"color:{MUTED};padding:0 8px;")
         lay.addWidget(self.sb_err, 1)
+        # Clickable capability pill — opens the Capabilities panel (OS-aware
+        # report of what works and how to enable the rest).
+        self.sb_caps = QPushButton("⚙ caps", objectName="CapsPill", flat=True)
+        self.sb_caps.setCursor(Qt.PointingHandCursor)
+        self.sb_caps.setToolTip("Show what works on this system and how to enable the rest")
+        self.sb_caps.clicked.connect(self._show_capabilities)
+        self.sb_caps.setStyleSheet(f"color:{MUTED};border:none;padding:0 8px;")
+        lay.addWidget(self.sb_caps)
         return bar
 
     # ── state machine ───────────────────────────────────────────────────────────

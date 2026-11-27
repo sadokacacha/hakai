@@ -137,3 +137,54 @@ def test_protection_alert_is_wired_and_coalesced(_app):
     win._drain_alerts()
     assert win.sb_alert.text().endswith("alert 19")
     assert len(win._alert_q) == 0, "drain must empty the queue"
+
+
+# ── Capability surface (cross-platform mission) ────────────────────────────────
+
+
+def test_caps_pill_and_report(_app):
+    win = _win(_app)
+    assert win.sb_caps.text().startswith("⚙ caps")
+    report = win._capabilities_report()
+    assert "Monitoring" in report
+    assert "Interception (Linux-only)" in report
+
+
+def test_interception_nav_disabled_on_windows(_app, monkeypatch):
+    """On a non-Linux OS the Warden/Keeper tabs are disabled, not misleading."""
+    import core.capabilities as cap
+
+    cap._cached.cache_clear()
+    monkeypatch.setattr(cap, "IS_WINDOWS", True)
+    monkeypatch.setattr(cap, "_os_key", lambda: "windows")
+    monkeypatch.setattr(cap, "is_elevated", lambda: True)
+    monkeypatch.setattr(cap, "_has_npcap", lambda: True)
+    monkeypatch.setattr(cap, "_has_module", lambda m: True)
+    monkeypatch.setattr(cap.shutil, "which", lambda n: "/x/" + n)
+    try:
+        win = _win(_app)
+        # Warden (1) and Keeper (2) must be disabled; Watch (0) stays enabled.
+        assert win._nav_group.button(0).isEnabled()
+        assert not win._nav_group.button(1).isEnabled()
+        assert not win._nav_group.button(2).isEnabled()
+    finally:
+        cap._cached.cache_clear()
+
+
+def test_monitoring_available_keeps_app_ready(_app, monkeypatch):
+    """Interception-off on Windows does NOT mark the whole app degraded."""
+    import core.capabilities as cap
+
+    cap._cached.cache_clear()
+    monkeypatch.setattr(cap, "IS_WINDOWS", True)
+    monkeypatch.setattr(cap, "_os_key", lambda: "windows")
+    monkeypatch.setattr(cap, "is_elevated", lambda: True)
+    monkeypatch.setattr(cap, "_has_npcap", lambda: True)
+    monkeypatch.setattr(cap, "_has_module", lambda m: True)
+    monkeypatch.setattr(cap.shutil, "which", lambda n: "/x/" + n)
+    try:
+        win = _win(_app)
+        # All monitoring caps available → state is not 'degraded'.
+        assert win._state != "degraded"
+    finally:
+        cap._cached.cache_clear()

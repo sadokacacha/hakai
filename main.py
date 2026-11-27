@@ -5,7 +5,6 @@ Run with:  sudo python3 main.py
 """
 
 import os
-import shutil
 import sys
 import threading
 
@@ -53,31 +52,44 @@ def _check_root():
 
 
 def _check_deps():
-    # Core capabilities Lanwarden relies on. nft and tc are required for the
-    # firewall/shaping engine; bpftool for the optional XDP drop; the rest are
-    # recommended. Missing ones are reported explicitly so a degraded run is
-    # never silent.
-    required = {
-        "nft": "REQUIRED: nftables — firewall / cut / stealth engine.",
-        "tc": "REQUIRED: iproute2 tc — bandwidth limiting.",
-    }
-    recommended = {
-        "bpftool": "Optional: XDP/eBPF drop management (also needs BCC + clang).",
-        "nmap": "For fast network scanning and fingerprinting.",
-        "arpspoof": "Fallback ARP engine (apt install dsniff).",
-        "iw": "For WiFi deauth / monitor mode management.",
-    }
-    missing_required = [n for n in required if not shutil.which(n)]
-    missing_recommended = [n for n in recommended if not shutil.which(n)]
-    if missing_required:
-        print("\n[!] ERROR: Missing REQUIRED capabilities — core features will fail:")
-        for m in missing_required:
-            print(f"    - {m:8} : {required[m]}")
-    if missing_recommended:
-        print("\n[!] WARNING: Missing recommended dependencies:")
-        for m in missing_recommended:
-            print(f"    - {m:8} : {recommended[m]}")
-    if missing_required or missing_recommended:
+    # Report capability availability for the current OS, honestly and without
+    # pretending a Windows box is a broken Linux one. The capability registry
+    # (core/capabilities.py) knows which features are OS-supported, which need a
+    # missing dependency, and which need elevation — so interception features
+    # (nft/tc/ARP) are flagged "Linux-only" on Windows rather than "missing".
+    from core.capabilities import INTERCEPTION, MONITOR, get_capabilities
+
+    caps = get_capabilities()
+
+    # Actionable here: capabilities that COULD work on this OS but are blocked by
+    # a missing dependency or missing elevation.
+    blocked_here = [
+        c
+        for c in caps.values()
+        if not c.available and c.supported_on_this_os and (c.missing_dep or c.needs_elevation)
+    ]
+    mon_blocked = [c for c in blocked_here if c.category in (MONITOR, "diagnostic")]
+    engine_blocked = [c for c in blocked_here if c.category == INTERCEPTION]
+
+    if mon_blocked:
+        print("\n[!] Some monitoring features are limited on this system:")
+        for c in mon_blocked:
+            print(f"    - {c.title:28} : {c.reason}  → {c.remedy}")
+    if engine_blocked:
+        print("\n[!] Interception engine features need attention:")
+        for c in engine_blocked:
+            print(f"    - {c.title:28} : {c.reason}  → {c.remedy}")
+
+    # Interception is Linux-only by design; say so once on other platforms.
+    os_unsupported_engine = [
+        c for c in caps.values() if c.category == INTERCEPTION and not c.supported_on_this_os
+    ]
+    if os_unsupported_engine:
+        print(
+            "\n[i] Active interception (cut / firewall / shaping) is Linux-only; "
+            "monitoring & diagnostics run on this platform."
+        )
+    if mon_blocked or engine_blocked or os_unsupported_engine:
         print("")
 
 
