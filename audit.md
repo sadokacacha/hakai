@@ -3983,3 +3983,86 @@ cosmetic, not changed to avoid config churn.
 ## Recommendation
 Automated gates: **GO** (all green, format now enforced repo-wide, deps clean).
 Release: **conditional** on the documented manual lab verification — unchanged.
+
+---
+
+# Cross-platform (Linux + Windows) mission — Phase 1 compatibility audit — 2026-11-27
+
+Operator decision received: **Windows is a first-class target**, not an
+unsupported/silently-degraded platform. This audit inspects the *actual* tree
+(not old roadmap text). Key correction to the prior "Windows = unsupported"
+framing: substantial honest Windows scaffolding already exists.
+
+## What already works on Windows (verified by reading the code)
+- **Network detection** — `system/netinfo._detect_network_windows()` parses
+  `ipconfig /all` + `route print` (gateway, my_ip, my_mac, subnet, wifi flag).
+  `detect_network()` dispatches Linux/Windows at runtime. Real, not faked.
+  *Limitation:* regexes assume en-US `ipconfig` labels; localized Windows unparsed.
+- **Device discovery** — `network/scanner.Scanner.scan()` tries nmap → Scapy ARP
+  sweep → **`arp -a`** (Windows branch at `scanner.py:446`). The `arp -a` table
+  parse works with no Npcap, so discovery degrades to the OS ARP cache, not to
+  nothing.
+- **Platform guard** — `core/osutil.IS_WINDOWS` is the single source of truth;
+  `main._check_root()` already detects Admin via `ctypes.shell32.IsUserAnAdmin`.
+
+## Genuine Windows gaps (monitoring/diagnostics scope)
+1. **Traffic / bandwidth statistics silently return zero.**
+   `network/traffic.TrafficCounter._read_proc()` reads `/proc/net/dev`; on
+   Windows it `return 0, 0` → every per-device/interface speed is 0. This is the
+   one real "silently returns empty" violation for monitoring. `_ipt_loop` (nft
+   FORWARD counters) also no-ops — but that is the *interception* data path.
+2. **No interface enumeration for selection.** Detection auto-picks one adapter;
+   there is no "list all NICs and let the user choose" on either OS (Linux also
+   auto-picks). Phase 3 wants explicit enumeration.
+3. **No capability-reporting system.** The UI cannot tell the user *why* a
+   feature is unavailable (unsupported OS / needs Admin / missing Npcap). Net-new,
+   valuable on both platforms.
+4. **Passive sniffer** (`_scapy_loop`) needs Npcap on Windows; without it scapy
+   `sniff` raises and the loop idles. Needs capability reporting + a non-Npcap
+   fallback for stats (see gap 1).
+
+## Correctly Linux-only — KEEP ISOLATED (NOT in scope; Phase 4 rule)
+Invasive manipulation: ARP poison (`network/arp.py`), nft/iptables FORWARD DROP
+(`system/nft_filter.py`), `tc` shaping (`system/tc_manager.py`), sysctl mutation,
+promisc, XDP, deauth, masquerade, DNS spoof. These require Linux kernel
+primitives and are the project's "attack" surface. The mission says do **not**
+build cross-platform attack. They already return explicit errors or guard on
+`IS_WINDOWS`; they must stay behind the capability layer, reported as
+"Linux-only," never reimplemented for Windows.
+
+## Compatibility matrix
+
+| Capability | Linux | Windows | Implementation | Dependency | Status |
+|---|---|---|---|---|---|
+| Platform detection | ✅ | ✅ | `osutil.IS_WINDOWS`, Admin/root check | stdlib/ctypes | Fully supported |
+| Network/gateway detection | ✅ | ✅ | `ip route`+ioctl / `ipconfig`+`route` | stdlib | Supported (Win: en-US only) |
+| Interface enumeration/selection | ⚠️ auto | ⚠️ auto | single-adapter auto-pick | — | Not implemented (both) |
+| Device discovery (ARP/host) | ✅ | ✅ | nmap→scapy→`arp -n`/`arp -a` | scapy(+nmap/Npcap opt) | Supported w/ limitations |
+| Hostname/mDNS/UPnP identify | ✅ | ✅ | sockets, scapy sniff | scapy(+Npcap on Win) | Supported w/ limitations |
+| Passive traffic sniffer | ✅ | ⚠️ | scapy `sniff` | scapy+**Npcap** | Win: needs Npcap |
+| **Traffic/bandwidth stats** | ✅ | ❌ | `/proc/net/dev` only | — | **Not implemented (Win) — silent 0** |
+| Capability/permission reporting | ❌ | ❌ | none | — | Not implemented (both) |
+| Device inventory / sqlite | ✅ | ✅ | `core/persistence` (sqlite WAL) | stdlib | Fully supported (verify Win path) |
+| ARP cut / blackout | ✅ | 🚫 | scapy L2 + nft | Linux kernel | Linux-only (keep isolated) |
+| nft/iptables/tc/sysctl/XDP/deauth | ✅ | 🚫 | Linux CLIs/kernel | Linux kernel | Linux-only (keep isolated) |
+
+Legend: ✅ works · ⚠️ partial/needs-work · ❌ missing/silent-degrade · 🚫 Linux-only by design.
+
+## Smallest architecture change that fixes the real gaps
+No framework, no rewrite. Three small, additive pieces:
+1. **`core/capabilities.py`** — a probe registry returning, per capability,
+   `{name, available, supported_os, needs_elevation, missing_dep, reason, remedy}`.
+   Probed once at startup; consumed by the UI. Replaces scattered silent no-ops
+   with structured truth. (Phase 2/4)
+2. **Cross-platform NIC stats + enumeration backend** — give `TrafficCounter`
+   an interface-IO-counter source that works on Windows, and add
+   `list_interfaces()`. Cleanest via **`psutil`** (`net_io_counters(pernic=True)`,
+   `net_if_addrs`, `net_if_stats`) — one well-maintained cross-platform dep —
+   behind a try/except so absence degrades to a *reported* capability, not a
+   silent zero. (Phase 3) — **dependency decision flagged below.**
+3. **UI capability surface** — a small status area listing each capability's
+   state + remedy; disable (not fake) controls whose capability is unavailable.
+   (Phase 7)
+
+Modules that stay untouched: `core/persistence`, `core/device`, the entire
+Linux interception layer, `ui/theme`, sqlite schema.
