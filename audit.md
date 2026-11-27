@@ -4066,3 +4066,51 @@ No framework, no rewrite. Three small, additive pieces:
 
 Modules that stay untouched: `core/persistence`, `core/device`, the entire
 Linux interception layer, `ui/theme`, sqlite schema.
+
+---
+
+# Cross-platform mission — Phases 3–6 implementation — 2026-11-27
+
+Small auditable stages, each committed with tests (all gates green on Linux).
+
+## Stage A — capability registry (`core/capabilities.py`) — DONE
+Read-only probe model: `{available, supported_os, needs_elevation, missing_dep,
+reason, remedy}` per feature. Cross-platform `is_elevated()`; scapy/psutil/Npcap
+probes. Interception caps are Linux+root only and reported unsupported on
+Windows, never faked. 9 mocked tests.
+
+## Stage B — cross-platform NIC stats + enumeration (psutil) — DONE
+`TrafficCounter._read_proc` now reads per-NIC counters via psutil on both OSes
+(fallback `/proc/net/dev` on Linux; honest (0,0) only when no source exists,
+reported by the capability layer). New `system.netinfo.list_interfaces()` for
+interface selection (psutil + `/sys/class/net` Linux fallback). `psutil>=5.9`
+added to requirements (behind try/except). 10 mocked tests. Verified on the dev
+box: real wlan0 counters (318 MB rx / 36 MB tx) now read on the cross-platform
+path.
+
+## Stage C — OS-aware UI capability surface — DONE
+`main._check_deps` is capability-driven (Windows no longer told nft/tc are
+"missing required"; interception reported Linux-only). Window shows a clickable
+"⚙ caps n/m" pill → grouped Capabilities panel (reason + remedy). Warden/Keeper
+interception tabs are disabled when interception is unsupported on the OS (no
+misleading enabled buttons). `_assess_capabilities` marks "degraded" only when a
+*monitoring* capability this OS supports is unavailable. 3 UI tests.
+
+## Phase 5 — state.json — ALREADY RESOLVED (no work needed)
+Investigated: the write-only `state.json` was removed in **P7 #24**
+(`core/controller.save_state` comment + no `Device.to_state` remains). Live
+config (iface/gateway/nicknames/devices) persists in **sqlite** at
+`~/.lanwarden/lanwarden.db` via `core/persistence`. `Path.home()/".lanwarden"`
+and `sqlite3` are cross-platform (Windows → `C:\Users\<user>\.lanwarden`). The
+old §1.2 "serialized but never loaded" item is **stale/resolved**. Decision:
+option B (remove redundant persistence) was the right call and is already done.
+
+## Phase 6 — Windows + Linux CI — DONE (workflow added; needs a push to execute)
+`.github/workflows/ci.yml`: matrix `[ubuntu-latest, windows-latest]`, each runs
+`ruff check`, `ruff format --check`, `mypy`, `pytest -q` (offscreen Qt; Linux Qt
+libs installed). CI has no real NIC/Npcap/root, so hardware/privilege paths stay
+mocked — this verifies the code imports/builds/behaves on real Windows, not that
+live capture works. Audited the suite for Windows portability: no top-level
+Unix-only imports; the 4 tests touching `/proc`/`AF_PACKET`/`fcntl` use mocked
+strings/sockets, so they run on Windows. **The workflow executes only once the
+branch is pushed to GitHub (not done — push requires operator approval).**
