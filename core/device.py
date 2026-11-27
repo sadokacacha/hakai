@@ -1,6 +1,7 @@
 """
 core/device.py — Rich Device model with full state tracking.
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -11,33 +12,37 @@ from core.persistence import db
 
 class Device:
     def __init__(self, ip: str, mac: str = "", hostname: str = "", vendor: str = ""):
-        self.ip           = ip
-        self.mac          = mac
-        self.hostname     = hostname
-        self.vendor       = vendor or lookup_oui(mac)
-        self.status       = "online"   # online | self | cut
-        self.cut          = False
-        self.limited      = False
-        self.limit_kb     = db.get("default_limit_kb", 500)
-        self.last_seen    = datetime.now().strftime("%H:%M:%S")
-        self.open_ports:  list[int]       = []
-        self.os_guess:    str             = ""
-        self.services:    dict[int, str]  = {}
-        self.identity:    str             = ""
-        self.rx_speed:    float           = 0.0
-        self.tx_speed:    float           = 0.0
-        self.rx_total:    int             = 0
-        self.tx_total:    int             = 0
+        self.ip = ip
+        self.mac = mac
+        self.hostname = hostname
+        self.vendor = vendor or lookup_oui(mac)
+        self.status = "online"  # online | self | cut
+        self.cut = False
+        self.limited = False
+        self.limit_kb = db.get("default_limit_kb", 500)
+        self.last_seen = datetime.now().strftime("%H:%M:%S")
+        self.open_ports: list[int] = []
+        self.os_guess: str = ""
+        self.services: dict[int, str] = {}
+        self.identity: str = ""
+        self.rx_speed: float = 0.0
+        self.tx_speed: float = 0.0
+        self.rx_total: int = 0
+        self.tx_total: int = 0
         # Bandwidth sparkline history (last 30 samples, bytes/s)
-        self.rx_history:  list[float]     = []
-        self.tx_history:  list[float]     = []
+        self.rx_history: list[float] = []
+        self.tx_history: list[float] = []
 
         # ── Intelligence & Confidence ──
-        self.confidence:  int             = 0    # 0-100
-        self.tcp_ttl:     int             = 0
-        self.tcp_window:  int             = 0
-        self.recon_data:  dict            = {
-            "ssl_cn": "", "http_title": "", "upnp_model": "", "ptr_name": "", "ipv6_ll": ""
+        self.confidence: int = 0  # 0-100
+        self.tcp_ttl: int = 0
+        self.tcp_window: int = 0
+        self.recon_data: dict = {
+            "ssl_cn": "",
+            "http_title": "",
+            "upnp_model": "",
+            "ptr_name": "",
+            "ipv6_ll": "",
         }
 
     # ── Nickname (persisted by MAC) ────────────────────────────────────────
@@ -52,8 +57,10 @@ class Device:
 
     # ── Display helpers ────────────────────────────────────────────────────
     def display_name(self) -> str:
-        if self.nickname:   return self.nickname
-        if self.hostname:   return self.hostname
+        if self.nickname:
+            return self.nickname
+        if self.hostname:
+            return self.hostname
         return self.ip
 
     def update_history(self, rx_spd: float, tx_spd: float):

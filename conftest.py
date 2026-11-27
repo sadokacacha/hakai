@@ -1,4 +1,5 @@
 """Pytest bootstrap: put the project root on sys.path so `import core`, etc. work."""
+
 import os
 import sys
 

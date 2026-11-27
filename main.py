@@ -3,6 +3,7 @@ main.py — Lanwarden entry point.
 
 Run with:  sudo python3 main.py
 """
+
 import os
 import shutil
 import sys
@@ -16,6 +17,7 @@ def _fix_sys_path():
         if sudo_user:
             try:
                 import pwd
+
                 user_home = pwd.getpwnam(sudo_user).pw_dir
                 version = f"{sys.version_info.major}.{sys.version_info.minor}"
                 user_site = os.path.join(user_home, f".local/lib/python{version}/site-packages")
@@ -24,25 +26,31 @@ def _fix_sys_path():
             except Exception:
                 pass
 
+
 _fix_sys_path()
+
 
 def _check_root():
     if sys.platform == "win32":
         # Windows: check for Administrator privileges via ctypes
         try:
             import ctypes
+
             is_admin = ctypes.windll.shell32.IsUserAnAdmin()
         except Exception:
             is_admin = False
         if not is_admin:
             print("[!] WARNING: Lanwarden is not running as Administrator.")
             print("    Network features (ARP, packet capture) require elevated privileges.")
-            print("    Right-click run.bat and select 'Run as Administrator' for full functionality.")
+            print(
+                "    Right-click run.bat and select 'Run as Administrator' for full functionality."
+            )
     else:
         # Linux/macOS: check for root via euid
         if os.geteuid() != 0:
             print("[!] Lanwarden must run as root.  Use: sudo python3 main.py")
             sys.exit(1)
+
 
 def _check_deps():
     # Core capabilities Lanwarden relies on. nft and tc are required for the
@@ -51,13 +59,13 @@ def _check_deps():
     # never silent.
     required = {
         "nft": "REQUIRED: nftables — firewall / cut / stealth engine.",
-        "tc":  "REQUIRED: iproute2 tc — bandwidth limiting.",
+        "tc": "REQUIRED: iproute2 tc — bandwidth limiting.",
     }
     recommended = {
-        "bpftool":  "Optional: XDP/eBPF drop management (also needs BCC + clang).",
-        "nmap":     "For fast network scanning and fingerprinting.",
+        "bpftool": "Optional: XDP/eBPF drop management (also needs BCC + clang).",
+        "nmap": "For fast network scanning and fingerprinting.",
         "arpspoof": "Fallback ARP engine (apt install dsniff).",
-        "iw":       "For WiFi deauth / monitor mode management.",
+        "iw": "For WiFi deauth / monitor mode management.",
     }
     missing_required = [n for n in required if not shutil.which(n)]
     missing_recommended = [n for n in recommended if not shutil.which(n)]
@@ -71,6 +79,7 @@ def _check_deps():
             print(f"    - {m:8} : {recommended[m]}")
     if missing_required or missing_recommended:
         print("")
+
 
 _check_root()
 _check_deps()
@@ -94,10 +103,10 @@ def main():
             import subprocess
 
             from network.deauth import DeauthManager
-            r = subprocess.run(
-                ["iw", "dev", net.iface, "link"],
-                capture_output=True, text=True)
+
+            r = subprocess.run(["iw", "dev", net.iface, "link"], capture_output=True, text=True)
             import re
+
             m = re.search(r"Connected to ([\w:]+)", r.stdout)
             bssid = m.group(1) if m else ""
             deauth_mgr = DeauthManager(bssid=bssid, iface=net.iface)
@@ -116,11 +125,11 @@ def main():
     # Restore network state on Ctrl+C / kill / interpreter exit, not only the
     # GUI close button (WM_DELETE_WINDOW). ctrl.stop() is idempotent.
     from core.shutdown import install_shutdown_hooks
+
     install_shutdown_hooks(ctrl)
 
     # ── Sync vendor DB in background ──────────────────────────────────────────
-    threading.Thread(target=sync_vendor_db_bg, daemon=True,
-                     name="vendor_db_sync").start()
+    threading.Thread(target=sync_vendor_db_bg, daemon=True, name="vendor_db_sync").start()
 
     # ── UI (PySide6) ──────────────────────────────────────────────────────────
     from PySide6.QtWidgets import QApplication
