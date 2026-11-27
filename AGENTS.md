@@ -1,147 +1,482 @@
-# AGENTS.md — Lanwarden Engineering Workflow
+# AGENTS.md — Hakai Autonomous Engineering
 
-## 1. Authority
+## 1. Purpose
 
-This file defines project engineering standards, authorization requirements, phase sequencing, verification and review procedures.
+This document governs engineering workflow, task sequencing, verification, audit tracking, and autonomous execution for Hakai.
 
-CLAUDE.md defines the project overview and general conventions.
+CLAUDE.md defines the architecture, conventions, and application requirements.
 
-When instructions conflict, follow the applicable safety requirements and the more specific engineering requirements.
+The goal is to deliver a reliable, maintainable application without requiring the user to micromanage each engineering task.
 
-## 2. Authorization and network scope
+---
 
-- Development and testing must respect authorization boundaries.
-- Active network testing is restricted to explicitly authorized environments.
-- Use isolated lab networks and allowlisted test devices.
-- Require operator confirmation before active network operations.
-- Do not silently target arbitrary LAN devices.
-- Do not add stealth, evasion or credential-harvesting functionality.
-- Preserve operator-visible status and reliable rollback.
+## 2. Source of truth
 
-Mocked tests are acceptable for code that cannot be verified without an actual lab environment.
+Determine project state from actual evidence:
 
-## 3. Phase management
+1. Current source code.
+2. Git history.
+3. Current branch and working tree.
+4. Tests.
+5. audit.md.
+6. Existing roadmap documents.
+7. CLAUDE.md.
+8. This file.
 
-The project uses sequential development phases.
+Do not trust stale phase summaries blindly.
 
-Rules:
-- Follow the established phase order.
-- Do not skip unfinished tasks.
-- Do not repeat completed tasks without evidence of a regression.
-- Every task must have implementation evidence.
-- Every task must have test evidence.
-- Update audit.md after each completed task.
-- Commit only after relevant verification.
-- Stop at phase boundaries and report progress.
+When sources disagree, investigate and document the discrepancy. Do not overwrite historical records simply to make the roadmap look consistent.
 
-## 4. Current reliability roadmap
+---
+
+## 3. Authorization and safety boundaries
+
+All active network testing must be authorized and performed within appropriate controlled environments.
+
+- Do not automatically execute privileged network operations.
+- Do not modify host networking during automated tests.
+- Mock system-level commands where possible.
+- Require explicit operator approval for live networking tests.
+- Restrict sensitive active testing to isolated lab networks.
+- Preserve authorization checks.
+- Preserve operator-visible status.
+- Preserve restoration mechanisms.
+- Do not add stealth, evasion, covert interception, credential harvesting, or arbitrary-target functionality.
+
+Ordinary engineering maintenance, tests, defensive diagnostics, reliability fixes, UI improvements, documentation, and dependency maintenance remain in scope.
+
+---
+
+## 4. Autonomy
+
+The user delegates routine engineering tasks.
+
+Do not ask the user what to do next when an established roadmap determines the next task.
+
+You are expected to:
+
+- Inspect.
+- Plan internally.
+- Make reasonable engineering decisions.
+- Implement.
+- Test.
+- Review.
+- Document.
+- Commit.
+- Continue.
+
+Do not stop after writing a plan.
+
+Do not stop after producing an audit.
+
+Do not stop after completing one task if more approved tasks remain.
+
+Avoid unnecessary user interruptions.
+
+---
+
+## 5. Decision policy
+
+Make routine reversible decisions autonomously.
+
+Examples of decisions you do not need to ask about:
+
+- Internal refactoring.
+- Bug fixes.
+- Regression tests.
+- Type improvements.
+- Logging improvements.
+- Error handling.
+- Documentation.
+- Non-breaking dependency updates.
+- Test cleanup.
+- Small UI fixes.
+- Dead-code removal supported by evidence.
+
+Ask the user before:
+
+- Destructive actions.
+- Deleting user data.
+- Changing significant product behavior.
+- Changing major architecture.
+- Live network testing.
+- Privileged host networking operations.
+- Adding external services requiring credentials.
+- Purchasing anything.
+- Merging.
+- Pushing.
+- Releasing.
+
+If blocked, document the blocker and continue with independent tasks.
+
+---
+
+## 6. Task lifecycle
+
+Every task follows this workflow.
+
+### Step 1 — Inspect
+
+- Check branch.
+- Check git status.
+- Review recent commits.
+- Inspect relevant files.
+- Review existing tests.
+- Read relevant instructions.
+- Confirm the task is still incomplete.
+
+### Step 2 — Establish baseline
+
+Run relevant tests or checks before modifying code when appropriate.
+
+Record existing failures separately from new failures.
+
+### Step 3 — Implement
+
+- Make the smallest correct change.
+- Preserve working behavior.
+- Avoid unnecessary dependencies.
+- Avoid unrelated changes.
+- Keep architecture consistent.
+
+### Step 4 — Test
+
+- Add regression coverage.
+- Run focused tests.
+- Run related tests.
+- Test failure paths.
+- Mock privileged operations.
+
+### Step 5 — Verify
+
+Run applicable quality checks.
+
+Fix regressions caused by your changes.
+
+### Step 6 — Review
+
+Inspect:
+
+- Diff.
+- Accidental changes.
+- Resource lifecycle.
+- Error handling.
+- Logging.
+- Test coverage.
+- Security boundaries.
+- Compatibility.
+
+### Step 7 — Document
+
+Update audit.md.
+
+Record:
+
+- Task ID.
+- Status.
+- Implementation.
+- Files changed.
+- Test evidence.
+- Remaining limitations.
+
+### Step 8 — Commit
+
+Create a focused commit after successful verification.
+
+Never amend existing commits.
+
+### Step 9 — Continue
+
+Move to the next eligible task automatically.
+
+Do not ask the user to select the next task when the roadmap determines it.
+
+---
+
+## 7. Task status definitions
+
+Use these statuses consistently:
+
+- TODO — Not started.
+- IN PROGRESS — Actively being worked on.
+- BLOCKED — Cannot proceed without a dependency or decision.
+- DONE — Implementation and verification completed.
+- DEFERRED — Intentionally postponed with a reason.
+
+A task cannot be marked DONE based solely on inspection.
+
+A task cannot be marked DONE if verification has not been completed.
+
+For tasks requiring real hardware, privileged system behavior, or live network verification, distinguish implementation completion from manual verification.
+
+---
+
+## 8. Phase roadmap
+
+The phase numbers below are historical project identifiers, not a guarantee that every task is still outstanding.
+
+Verify the actual status from audit.md, commits, and source code.
 
 ### P0–P3
-Previously completed. Do not repeat without a demonstrated regression.
+
+Previously completed.
+
+Do not repeat without evidence of regressions.
 
 ### P4 — Reliability cleanup
 
-P4-1 — IP validation / netutil consolidation — COMPLETED (core/netutil).
-P4-2 — OUI lookup deduplication — COMPLETED (OUI DB in core/oui, lookup in network/oui_lookup).
-P4-3 — Dead-code removal — COMPLETED.
-P4-4 — Unused configuration keys — COMPLETED.
-P4-5 — Platform shim — COMPLETED (core/osutil); a Windows-behaviour product
-       decision for the evasion modules (masquerade/chameleon) remains open.
-P4-6 — UI threading — COMPLETED (ui/workers off-Qt-thread submit).
+Previously completed, with documented residuals.
 
-> The P4–P7 phase items were superseded by the STEP 1–6 product pass (rename to
-> Lanwarden, nft FORWARD chain, sqlite/WAL storage, raw AF_PACKET send path,
-> PySide6 UI rebuild, cold review) and the subsequent reliability fixes.
-> **audit.md is the authoritative, current record** — treat it as the source of
-> truth when it disagrees with the phase labels above.
+Review only outstanding residuals or evidence of regressions.
 
-### P5
-Follow the existing project roadmap and audit.md.
+Known historical residuals:
 
-### P6
-Follow the existing project roadmap and audit.md.
+- Protection-panel threading residual PP-1.
+- P4-5(2) Windows behavior decision.
 
-### P7
-Follow the existing project roadmap and audit.md.
+Confirm their actual status before proceeding.
 
-### P8 — Verification workflow
+### P5 — Naming cleanup
 
-P8 is the verification workflow for completed changes.
+Review the established P5 roadmap.
 
-For each applicable task:
-- Run focused tests.
-- Run the relevant full test suite.
-- Run lint.
-- Run formatting checks.
-- Run type checking.
-- Inspect changed files.
-- Check for regressions.
-- Record actual results.
+Complete remaining naming cleanup sequentially.
 
-Do not fabricate test results.
+Do not rename public interfaces unnecessarily.
 
-### P9 — Release engineering review
+Preserve compatibility and avoid cosmetic changes without clear value.
 
-Perform a cold review of the complete branch before merge.
+### P6 — UI and dependency cleanup
 
-Review:
-- Architecture.
+Review the established P6 roadmap.
+
+Historical themes included:
+
+- UI cleanup.
+- Pillow/Pillow dependency review.
+- Tk/CustomTkinter compatibility.
+- Dependency removal candidates.
+
+Determine which tasks are actually unfinished.
+
+### P7 — Feature review
+
+Previously reviewed.
+
+Historical report states:
+
+- Kill-switch issue fixed.
+- Write-only state persistence removed.
+- DNS spoof and device monitoring were deferred to `/wire`.
+
+Verify the current state rather than repeating the completed review.
+
+### P8 — Verification
+
+Verification phase.
+
+Run consolidated verification against the actual current HEAD.
+
+Required checks as applicable:
+
+- pytest.
+- Ruff lint.
+- Ruff formatting.
+- Mypy.
+- Dependency consistency.
+- Import/startup checks.
+- Regression checks.
+
+Do not count mocked testing as live verification.
+
+Do not fabricate evidence.
+
+### P9 — Release engineering
+
+A previous cold review was completed and committed.
+
+Revisit only if:
+
+- New code changes introduce new release risks.
+- A deferred blocker needs resolution.
+- Dependencies become outdated.
+- New evidence invalidates the prior review.
+
+P9 includes:
+
+- Dependency/toolchain modernization.
+- Security and dependency audit.
+- Architecture review.
 - Reliability.
+- Error paths.
 - Resource lifecycle.
-- Error handling.
-- Persistence.
-- State restoration.
-- Security boundaries.
-- Dependencies.
+- Restoration.
 - Test coverage.
-- Documentation.
-- Git history.
-- Outstanding issues.
+- Release readiness.
 
-Do not automatically modify unrelated code during the review.
+### /wire — Deferred networking feature integration
 
-## 5. Verification requirements
+This is a separately tracked, sensitive networking workstream.
 
-Every completed task must include:
+Do not automatically resume it as part of general reliability work.
 
-1. Files inspected.
-2. Files changed.
-3. Reason for changes.
-4. Tests added or modified.
-5. Commands executed.
-6. Actual results.
-7. Remaining limitations.
-8. Manual verification requirements.
+Keep active traffic interception and DNS-redirection development limited to authorized isolated-lab functionality. Do not expand covert or arbitrary-target capabilities.
 
-## 6. Git discipline
+Do not let deferred tasks block unrelated engineering improvements.
 
-- Work on the designated feature branch.
-- Never discard unrelated user changes.
-- Never force-push.
-- Never amend previous commits without explicit permission.
-- Keep commits focused.
-- Use descriptive commit messages.
-- Verify the working tree before committing.
+---
 
-## 7. Failure handling
+## 9. Verification standards
 
-If a task fails:
-- Identify the actual failure.
-- Do not hide or suppress it.
-- Fix it when within scope.
-- Add regression coverage.
-- Rerun the relevant verification.
+Use the repository's existing tools.
 
-If blocked:
-- Explain the exact blocker.
-- Identify what is completed.
-- Identify what remains.
-- Do not falsely mark the phase complete.
+Typical checks:
 
-## 8. Completion standard
+```bash
+pytest -v
+ruff check .
+ruff format --check .
+mypy .
+```
 
-A task is not complete merely because its code compiles.
+Run focused tests when appropriate.
 
-It must be integrated, tested, reviewed and documented.
+Run consolidated verification at phase completion.
 
-The goal is a reliable, maintainable and releasable application.
+For each check, record:
+
+- Command.
+- Whether it actually ran.
+- Actual result.
+- Existing failures.
+- New failures.
+- Limitations.
+
+Do not suppress failures simply to make a gate appear green.
+
+Formatting debt may be deferred only when it is clearly pre-existing and documented.
+
+---
+
+## 10. Dependency management
+
+Do not blindly upgrade all dependencies.
+
+For dependency tasks:
+
+- Inspect Python compatibility.
+- Inspect package constraints.
+- Check stable versions.
+- Review changelogs for significant upgrades.
+- Identify breaking changes.
+- Remove unused dependencies only with evidence.
+- Test the application after changes.
+- Keep installation reproducible.
+- Avoid unnecessary dependency replacements.
+
+Document dependency changes in audit.md.
+
+---
+
+## 11. Git rules
+
+Allowed autonomous Git actions:
+
+- Read status.
+- Read history.
+- Create branches when the existing workflow requires them.
+- Add focused changes.
+- Commit completed tasks.
+
+Forbidden without explicit user approval:
+
+- Force-push.
+- Amend.
+- Reset.
+- Destructive cleanup.
+- Merge.
+- Push.
+- Release tagging.
+
+Never discard unrelated user changes.
+
+Do not commit secrets, credentials, environment files, generated scratch scripts, or unintended artifacts.
+
+---
+
+## 12. Blocker policy
+
+If a task is blocked:
+
+1. Mark it BLOCKED or DEFERRED.
+2. Explain why.
+3. Record the impact.
+4. Identify the safest reasonable default.
+5. Continue with unrelated eligible tasks.
+6. Batch decisions into the final report.
+
+Interrupt the user only when continued execution would be unsafe, destructive, or impossible without an important decision.
+
+---
+
+## 13. Progress reporting
+
+Do not flood the user with progress updates.
+
+Work autonomously and provide a consolidated report at meaningful checkpoints.
+
+Checkpoint reports should be brief and contain:
+
+- Completed tasks.
+- Commit identifiers.
+- Verification results.
+- Remaining tasks.
+- Blockers.
+
+Avoid asking questions at the end of every task.
+
+---
+
+## 14. Completion criteria
+
+A phase is closed only when:
+
+- All phase tasks are accounted for.
+- Completed work has evidence.
+- Required tests pass.
+- Known failures are documented.
+- Deferred work has a reason.
+- audit.md is updated.
+
+The overall delegated mission is complete when:
+
+- All approved roadmap tasks are completed.
+- All automated gates pass or remaining failures are explicitly justified.
+- Remaining manual verification is documented.
+- Deferred items are documented.
+- A cold review is completed.
+- A release recommendation is provided.
+
+---
+
+## 15. Final report
+
+At the end, provide a consolidated report:
+
+- Starting state.
+- Roadmap reconciliation.
+- Phases completed.
+- Tasks completed.
+- Files changed.
+- Commits.
+- Dependency changes.
+- Tests executed and results.
+- Remaining defects.
+- Deferred work.
+- Manual verification checklist.
+- Release blockers.
+- GO / NO-GO recommendation.
+
+Do not merge, push, or release automatically.
+
+The user should not have to manually coordinate the roadmap.
