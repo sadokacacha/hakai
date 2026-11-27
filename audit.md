@@ -3902,3 +3902,84 @@ pytest -q            # expect: all passing (228 at time of writing)
 ruff check <changed files> ; ruff format --check <changed files>
 mypy network/arp.py core/controller.py core/netutil.py system/netinfo.py
 ```
+
+---
+
+# Roadmap reconciliation + release-gate verification — 2026-11-27
+
+Autonomous-completion pass. Inspected the real tree (no reliance on old
+summaries), re-measured every gate against HEAD, reconciled stale status, and
+fixed the one concrete gate failure found. No feature/behaviour change.
+
+## Verified gate state (actual output, HEAD = this pass)
+```
+python --version            # Python 3.14.8
+pytest -q                   # 228 passed in ~1.2s
+ruff check .                # All checks passed!
+ruff format --check .       # 95 files already formatted   (was: 3 would reformat)
+mypy .                      # Success: no issues found in 77 source files
+import smoke (30 modules)   # imported OK: 30 / 30
+UI offscreen + main.py      # import/compile OK
+```
+
+## Fixed this pass
+- **Format gate was failing on HEAD** — `conftest.py`, `core/device.py`,
+  `main.py` were committed unformatted (blank-line-after-docstring + the
+  column-aligned-assignment style in `device.py`). Ran `ruff format` on exactly
+  those three; `ruff format --check .` is now clean **repo-wide**. Logic
+  unchanged; 228 tests still green. Commit: `style: apply ruff format …`.
+
+## Status reconciliation (corrects stale current-status; history preserved above)
+- **Format debt (old §1.4 / §5, "intentionally not enforced", "35/42 files"):**
+  **RESOLVED.** That count predated the PySide6 rebuild. On the current tree only
+  3 files were off; now 0. `ruff format --check .` passes and can be treated as an
+  enforced gate.
+- **§9.8 "Pending phases" (P5 naming / P6 UI rebuild / `/wire`):** **DONE** since
+  that note (2026-11-20). P5 → rename to **Lanwarden**; P6 → PySide6 rebuild
+  (CustomTkinter + Pillow dropped); `/wire` → interception features wired. See the
+  "Product pass — 2026-11-22" section and git history (`b72dea8`, `25a9e3a`, …).
+- **§9.8 "engage_mirage_cloak reports CLOAKED silently":** **STALE/RESOLVED.**
+  `system/stealth.py` now logs warnings and returns `[CLOAK PARTIAL: … MAC
+  unchanged]` on the degraded path (commit `d22370b`).
+- **§9.8 `info_dialog.do_ping` / `ui/dashboard.py` items:** **OBSOLETE.** Those
+  CustomTkinter modules no longer exist; the UI is `ui/main_window.py` +
+  `ui/workers.py` + `ui/theme.py`.
+- **ARP audit (2026-11-25) — 11 findings A1–A11:** confirmed **all fixed**
+  (commit `25a9e3a`, +10 tests in `tests/test_arp_dualstack_restore.py`). Packet
+  -level lab verification of the new IPv6 NA poison/heal remains the manual gate.
+
+## Dependency / toolchain review (no changes needed)
+Installed vs. required floors — all satisfied, no drift, no known-vuln:
+| Package | Required | Installed | Note |
+|---|---|---|---|
+| scapy | >=2.7.0 | 2.8.0 | clears GHSA-cq46-m9x9-j8w2 RCE floor |
+| PySide6 | >=6.6.0 | 6.12.0 | |
+| pyqtgraph | >=0.13.0 | 0.14.0 | |
+| mac-vendor-lookup | >=0.1.15 | 0.1.15 | offline OUI table |
+| pytest | ==9.2.0 (pin) | 9.2.0 | |
+| ruff | ==0.17.6 (pin) | 0.17.6 | |
+| mypy | ==2.4.1 (pin) | 2.4.1 | |
+No upgrades justified this pass (all current, compatible on 3.14.8). Minor doc
+nit left as-is: the `[tool.mypy]` comment still names `customtkinter` (removed) —
+cosmetic, not changed to avoid config churn.
+
+## Genuinely remaining (deferred — NOT release-blockers; unchanged this pass)
+- **Product decisions (need the operator, not an engineer):**
+  - Windows behaviour: explicitly-unsupported vs. best-effort-degraded. The
+    engine is Linux-only; some paths silently no-op on Windows (traffic
+    `_ipt_loop`/`_read_proc`), others return explicit errors. Unifying this
+    changes behaviour on an untested platform — `core/osutil.py` documents it.
+  - `state.json` is written (`Device.to_state` / `save_state`) but never loaded
+    back (§1.2): implement restore-on-start or drop the serialization.
+- **Low-impact notes (safe to leave):** `classify_device` confidence side-effect
+  (benign under the GIL, §1.1); scanner module-level `ThreadPoolExecutor`s not
+  explicitly `.shutdown()` (stdlib `concurrent.futures` atexit joins them);
+  placeholder IPv6 doc prefix + ad-hoc SSL-CN byte scan (§1.3, needs
+  `cryptography` + deployment design).
+- **Manual lab verification** (root + isolated network + allowlisted device)
+  remains the pre-release gate: ARP cut/restore + IPv6 NA, kernel-state
+  capture/restore on crash/partial-init, DNS spoof, deauth. Checklists above.
+
+## Recommendation
+Automated gates: **GO** (all green, format now enforced repo-wide, deps clean).
+Release: **conditional** on the documented manual lab verification — unchanged.
