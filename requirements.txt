@@ -10,6 +10,12 @@ pyqtgraph>=0.13.0
 # column is empty for almost every real device. Still imported behind try/except
 # (core/oui.py), so the app degrades gracefully if it is ever absent.
 mac-vendor-lookup>=0.1.15
+# Cross-platform NIC byte counters + interface enumeration (Linux + Windows).
+# Replaces the Linux-only /proc/net/dev read so traffic/bandwidth stats and the
+# interface picker work on Windows too. Imported behind try/except (network/
+# traffic.py, system/netinfo.py); its absence is reported via core/capabilities
+# as a missing-dependency, never a silent zero.
+psutil>=5.9
 
 # ── Dev tooling (not needed to run the app; `pip install` for the gates) ──
 # Pinned to the versions the p8 gates are verified green against on Python

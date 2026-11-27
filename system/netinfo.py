@@ -19,6 +19,14 @@ from dataclasses import dataclass, field
 from core.netutil import valid_ip6
 from core.osutil import IS_WINDOWS as _IS_WINDOWS
 
+try:
+    import psutil
+
+    _PSUTIL_OK = True
+except ImportError:  # pragma: no cover - exercised on hosts without psutil
+    psutil = None  # type: ignore[assignment]
+    _PSUTIL_OK = False
+
 _log = logging.getLogger(__name__)
 
 # NIC offload features engage_mitm() disables and restore_network() puts back.
@@ -111,6 +119,91 @@ class NetInfo:
     _orig_accept_redirects: str = "1"
     _orig_promisc: bool = False
     _orig_offloads: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class NetInterface:
+    """A selectable network interface (cross-platform, read-only)."""
+
+    name: str
+    ipv4: str = ""
+    mac: str = ""
+    is_up: bool = False
+    is_loopback: bool = False
+    speed_mbps: int = 0
+
+
+def _list_interfaces_psutil() -> list[NetInterface]:
+    import socket as _socket
+
+    addrs = psutil.net_if_addrs()
+    try:
+        stats = psutil.net_if_stats()
+    except (OSError, RuntimeError):  # pragma: no cover - platform dependent
+        stats = {}
+    out: list[NetInterface] = []
+    for name, addr_list in addrs.items():
+        ni = NetInterface(name=name)
+        for a in addr_list:
+            if a.family == _socket.AF_INET and not ni.ipv4:
+                ni.ipv4 = a.address
+            elif getattr(_socket, "AF_PACKET", None) and a.family == _socket.AF_PACKET:
+                ni.mac = a.address.upper()
+            elif _IS_WINDOWS and a.family == getattr(_socket, "AF_LINK", -1):
+                ni.mac = a.address.replace("-", ":").upper()
+        st = stats.get(name)
+        if st is not None:
+            ni.is_up = bool(st.isup)
+            ni.speed_mbps = int(getattr(st, "speed", 0) or 0)
+        ni.is_loopback = name.lower().startswith("lo") or ni.ipv4.startswith("127.")
+        out.append(ni)
+    return out
+
+
+def _list_interfaces_linux_fallback() -> list[NetInterface]:
+    """psutil-free enumeration from /sys/class/net (Linux only)."""
+    import os
+
+    out: list[NetInterface] = []
+    base = "/sys/class/net"
+    try:
+        names = sorted(os.listdir(base))
+    except OSError:
+        return out
+    for name in names:
+        ni = NetInterface(name=name)
+        try:
+            with open(os.path.join(base, name, "address")) as f:
+                ni.mac = f.read().strip().upper()
+        except OSError:
+            pass
+        try:
+            with open(os.path.join(base, name, "operstate")) as f:
+                ni.is_up = f.read().strip() == "up"
+        except OSError:
+            pass
+        ni.is_loopback = name == "lo"
+        out.append(ni)
+    return out
+
+
+def list_interfaces(include_loopback: bool = False) -> list[NetInterface]:
+    """Enumerate selectable network interfaces on Linux or Windows.
+
+    Uses psutil when available (cross-platform), else a /sys/class/net fallback
+    on Linux. Returns [] rather than raising if nothing can enumerate — callers
+    surface that via the capability layer, never a silent empty UI with no
+    explanation. Loopback is excluded by default.
+    """
+    try:
+        ifaces = _list_interfaces_psutil() if _PSUTIL_OK else _list_interfaces_linux_fallback()
+    except Exception as e:  # defensive: enumeration must never crash startup
+        _log.warning("netinfo: interface enumeration failed: %s", e)
+        return []
+    if not include_loopback:
+        ifaces = [i for i in ifaces if not i.is_loopback]
+    ifaces.sort(key=lambda i: (not i.is_up, i.name))
+    return ifaces
 
 
 def _detect_network_windows() -> NetInfo:

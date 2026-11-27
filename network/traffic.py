@@ -20,6 +20,14 @@ except ImportError:
     AsyncSniffer = IP = Ether = sniff = None  # type: ignore[assignment,misc]
     SCAPY_OK = False
 
+try:
+    import psutil
+
+    PSUTIL_OK = True
+except ImportError:  # pragma: no cover - exercised on hosts without psutil
+    psutil = None  # type: ignore[assignment]
+    PSUTIL_OK = False
+
 
 import collections
 import logging
@@ -221,9 +229,38 @@ class TrafficCounter:
         return d if d >= 0 else 0
 
     @staticmethod
+    def _read_nic_psutil(iface: str) -> tuple[int, int] | None:
+        """(rx_bytes, tx_bytes) for ``iface`` via psutil — cross-platform.
+
+        Returns None (not (0, 0)) when psutil is absent or the interface name is
+        not among psutil's per-NIC keys, so the caller can distinguish "no data
+        source" from "genuinely zero bytes" and fall back / report honestly.
+        """
+        if not PSUTIL_OK or not iface:
+            return None
+        try:
+            counters = psutil.net_io_counters(pernic=True)
+        except (OSError, RuntimeError):  # pragma: no cover - platform dependent
+            return None
+        nic = counters.get(iface)
+        if nic is None:
+            return None
+        return int(nic.bytes_recv), int(nic.bytes_sent)
+
+    @staticmethod
     def _read_proc(iface: str) -> tuple[int, int]:
-        """Read interface byte counters from /proc/net/dev (Linux only)."""
+        """Read interface (rx, tx) byte counters — cross-platform.
+
+        Prefers psutil (works on Linux and Windows); falls back to
+        ``/proc/net/dev`` on Linux when psutil is unavailable or does not know
+        the interface. Returns (0, 0) only when no source can supply counters.
+        """
+        via_psutil = TrafficCounter._read_nic_psutil(iface)
+        if via_psutil is not None:
+            return via_psutil
         if _IS_WINDOWS:
+            # No psutil and no /proc on Windows: there is genuinely no counter
+            # source. The traffic_stats capability reports this; do not pretend.
             return 0, 0
         try:
             with open("/proc/net/dev") as f:
